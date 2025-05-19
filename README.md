@@ -23,7 +23,7 @@ An Obsidian plugin to supercharge your scripture study with structured links, co
 
 1. Clone or download this repository.
 2. Build the plugin with `npm install && npm run build`.
-3. Copy `main.js`, `manifest.json`, and `sql-wasm.wasm` into your Obsidian vault's plugin folder:  
+3. Copy `main.js`, and `manifest.json` into your Obsidian vault's plugin folder:  
    `.obsidian/plugins/standard-works-plugin/`
 4. Enable the plugin in Obsidian under **Settings → Community Plugins**.
 
