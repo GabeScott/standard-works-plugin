@@ -2470,7 +2470,7 @@ var SqlitePlugin = class extends import_obsidian.Plugin {
       for (const mutation of mutations) {
         if (mutation.type === "childList") {
           mutation.addedNodes.forEach((node) => {
-            if (node instanceof HTMLElement && node.matches("div.tree-item.search-result.is-collapsed")) {
+            if (node instanceof HTMLElement && node.matches("div.tree-item.search-result")) {
               const parent = node.parentElement;
               if (parent && parent.classList.contains("search-results-children")) {
                 this.sortBacklinksSafely(parent);
@@ -2569,7 +2569,7 @@ ${content}`).open();
   sortBacklinksSafely(container) {
     this.observer.disconnect();
     try {
-      const items = Array.from(
+      var items = Array.from(
         container.querySelectorAll("div.tree-item.search-result")
       );
       if (items.length < 2)
@@ -2578,29 +2578,32 @@ ${content}`).open();
       var tg_items = [];
       var verses = [];
       for (const item of items) {
-        if (item.textContent?.includes("April") || item.textContent?.includes("October")) {
+        const textContent = item.querySelector("div.search-result-file-title")?.textContent || "";
+        if (textContent.includes("April") || textContent.includes("October")) {
           gc_itmes.push(item);
-        } else if (item.textContent?.includes(".")) {
+        } else if (textContent.includes(".")) {
           verses.push(item);
         } else {
           tg_items.push(item);
         }
       }
       gc_itmes.sort((a, b) => {
-        const aText = a.textContent?.toLowerCase() || "";
-        const bText = b.textContent?.toLowerCase() || "";
-        return bText.localeCompare(aText);
+        const atextContent = a.querySelector("div.search-result-file-title")?.textContent || "";
+        const btextContent = b.querySelector("div.search-result-file-title")?.textContent || "";
+        return btextContent.localeCompare(atextContent);
       });
       tg_items.sort((a, b) => {
-        const aText = a.textContent?.toLowerCase() || "";
-        const bText = b.textContent?.toLowerCase() || "";
-        return aText.localeCompare(bText);
+        const atextContent = a.querySelector("div.search-result-file-title")?.textContent || "";
+        const btextContent = b.querySelector("div.search-result-file-title")?.textContent || "";
+        return atextContent.localeCompare(btextContent);
       });
       verses.sort((a, b) => {
         var aBookInt = -1;
         var bBookInt = -1;
-        const aBookStr = a.textContent?.split(" ").slice(0, -1).join(" ") || "";
-        const bBookStr = b.textContent?.split(" ").slice(0, -1).join(" ") || "";
+        const atextContent = a.querySelector("div.search-result-file-title")?.textContent || "";
+        const btextContent = b.querySelector("div.search-result-file-title")?.textContent || "";
+        const aBookStr = atextContent.split(" ").slice(0, -1).join(" ") || "";
+        const bBookStr = btextContent.split(" ").slice(0, -1).join(" ") || "";
         const aChapter = parseInt(a.textContent?.split(" ").slice(-1)[0].split(":")[0] || "");
         const bChapter = parseInt(b.textContent?.split(" ").slice(-1)[0].split(":")[0] || "");
         const aVerse = parseInt(a.textContent?.split(" ").slice(-1)[0].split(":")[1] || "");
@@ -2650,7 +2653,6 @@ ${content}`).open();
       for (const item of gc_itmes) {
         container.appendChild(item);
       }
-      console.log("Sorted backlinks in:", container);
     } finally {
       this.observer.observe(document.body, {
         childList: true,
