@@ -1,0 +1,11 @@
+{
+	"id": "standard-works-plugin",
+	"name": "Standard Works Plugin",
+	"version": "1.0.0",
+	"minAppVersion": "0.15.0",
+	"description": "Allows for searching and displaying of scripture commentaries.",
+	"author": "GabeScott",
+	"authorUrl": "https://gabescott.github.io",
+	"fundingUrl": "https://gabescott.github.io",
+	"isDesktopOnly": false
+}

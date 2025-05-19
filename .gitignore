@@ -1,0 +1,18 @@
+# Node
+node_modules/
+*.log
+npm-debug.log*
+
+# Obsidian Vault (keep your vault separate!)
+.obsidian/
+
+# OS/Editor junk
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# TypeScript build cache
+dist/
+*.tsbuildinfo
+
