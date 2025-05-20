@@ -391,34 +391,72 @@ export default class SqlitePlugin extends Plugin {
 		await this.saveData(this.settings);
 	}
 
+	private fileExists(filename: string): TFile | null {
+		const files = this.app.vault.getFiles();
+		filename = filename + ".md";
+		for (const file of files) {
+			if (file.name === filename) {
+				return true; // returns the TFile object if found
+			}
+		}
+		return false;
+	}
+
 	private linkifySelectedText(editor: Editor) {
 		const selectedText = editor.getSelection().trim();
 		var selectedTextFixed = selectedText
 
-		if (selectedTextFixed.includes("-")) {
-			selectedTextFixed = selectedTextFixed.split("-")[0]
-		}
-		selectedTextFixed = selectedTextFixed.replace(":", ".")
+		// Get all the words except the last one
+		var book = selectedText.split(" ").slice(0, -1).join(" ");
 		for (const [key, value] of Object.entries(abbreviations)) {
-			if (selectedTextFixed.includes(key)) {
-				selectedTextFixed = selectedTextFixed.replace(key, value);
+			if (book.includes(key)) {
+				book = book.replace(key, value);
 				break;
 			}
 		}
 
+		const chapter = selectedText.split(" ").slice(-1)[0].split(":")[0];
+		const verses = selectedText.split(" ").slice(-1)[0].split(":")[1].split(",").map((v: string) => v.trim());
 
+		var finishedFirst = false;
+
+		for (const verse of verses) {
+			
+			if (verse.includes("-")) {
+				const [start, end] = verse.split("-");
+				for (let i = parseInt(start); i <= parseInt(end); i++) {
+					console.log(i);
+					const filename = `${book} ${chapter}.${i}`;
+					if(this.fileExists(filename)){
+						if(finishedFirst)
+							selectedTextFixed += `[[${filename}|]]`;
+						else{
+							selectedTextFixed = `[[${filename}|${selectedText}]]`;
+							finishedFirst = true;
+						}
+					}
+				}
+			} else {
+				const filename = `${book} ${chapter}.${verse}`;
+				if(this.fileExists(filename)){
+					if(finishedFirst)
+						selectedTextFixed += `[[${filename}|]]`;
+					else{
+						selectedTextFixed = `[[${filename}|${selectedText}]]`;
+						finishedFirst = true;
+					}
+				}
+			}
+			
+		}
 
 		if (!selectedTextFixed) {
 			new Notice("No text selected");
 			return;
 		}
 
-		const matchedFile = selectedTextFixed.replace(":", ".")
-		if (matchedFile) {
-			editor.replaceSelection(`[[${matchedFile}|${selectedText}]]`);
-		} else {
-			new Notice(`No reference found with name "${selectedText}"`);
-		}
+		editor.replaceSelection(selectedTextFixed);
+
 	}
 }
 
