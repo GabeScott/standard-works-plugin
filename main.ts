@@ -399,7 +399,30 @@ export default class SqlitePlugin extends Plugin {
 				return true; // returns the TFile object if found
 			}
 		}
+		new Notice("File not found: " + filename);
 		return false;
+	}
+
+	private getNumVerses(book: string, chapter: string): string[] {
+		var verses = [];
+		var final_verse = 0;
+		const files = this.app.vault.getFiles();
+		for (const file of files) {
+			if (file.name.startsWith(`${book} ${chapter}.`)) {
+				var verse = file.name.split(".")[1];
+				if(parseInt(verse) > final_verse){
+					final_verse = parseInt(verse);
+				}
+			}
+		}
+		if(final_verse == 0){
+			new Notice(`Chapter not found: ${book} ${chapter}`);
+			return [];
+		}
+		for (let i = 1; i <= final_verse; i++) {
+			verses.push(i.toString());
+		}
+		return verses;
 	}
 
 	private linkifySelectedText(editor: Editor) {
@@ -415,8 +438,17 @@ export default class SqlitePlugin extends Plugin {
 			}
 		}
 
-		const chapter = selectedText.split(" ").slice(-1)[0].split(":")[0];
-		const verses = selectedText.split(" ").slice(-1)[0].split(":")[1].split(",").map((v: string) => v.trim());
+		var chapter = "";
+		var verses = [];
+
+		if (!selectedText.includes(":")) {
+			chapter = selectedText.split(" ").slice(-1)[0];
+			verses = this.getNumVerses(book, chapter);
+		}
+		else{
+			chapter = selectedText.split(" ").slice(-1)[0].split(":")[0];
+			verses = selectedText.split(" ").slice(-1)[0].split(":")[1].split(",").map((v: string) => v.trim());
+		}
 
 		var finishedFirst = false;
 
