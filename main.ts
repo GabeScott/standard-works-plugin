@@ -1,5 +1,14 @@
-import { App, Modal, Notice, Plugin, PluginSettingTab, Setting, Editor, MarkdownView, Menu, TFile} from "obsidian";
+import { App, Modal, Notice, Plugin, PluginSettingTab, Setting, Editor, MarkdownView, Menu, TFile, ItemView, WorkspaceLeaf} from "obsidian";
 import initSqlJs, { Database, SqlJsStatic } from "sql.js";
+
+interface ScriptureData {
+	[book: string]: {
+		heading?: string;
+		[chapter: string]: {
+			[verse: string]: string;
+		} | string;
+	};
+}
 
 interface SqlitePluginSettings {
 	dbPath: string;
@@ -100,6 +109,259 @@ const abbreviations = {
 	"A of F":"Articles of Faith"
 }
 
+const VIEW_TYPE_SCRIPTURE_CONTEXT = "scripture-context-view";
+
+class ScriptureContextView extends ItemView {
+	private plugin: SqlitePlugin;
+	private contentEl: HTMLElement;
+	private isUpdating: boolean = false;
+
+	constructor(leaf: WorkspaceLeaf, plugin: SqlitePlugin) {
+		super(leaf);
+		this.plugin = plugin;
+	}
+
+	getViewType(): string {
+		return VIEW_TYPE_SCRIPTURE_CONTEXT;
+	}
+
+	getDisplayText(): string {
+		return "Scripture Context Viewer";
+	}
+
+	getIcon(): string {
+		return "book-open";
+	}
+
+	async onOpen(): Promise<void> {
+		const container = this.containerEl.children[1];
+		container.empty();
+		this.contentEl = container.createDiv();
+		this.contentEl.style.height = "100%";
+		this.contentEl.style.display = "flex";
+		this.contentEl.style.flexDirection = "column";
+		
+		// Register event to update when active file changes
+		this.registerEvent(
+			this.app.workspace.on("active-leaf-change", () => {
+				this.updateContext();
+			})
+		);
+		
+		// Initial update
+		this.updateContext();
+	}
+
+	async updateContext(): Promise<void> {
+		if (!this.contentEl || this.isUpdating) return;
+		
+		this.isUpdating = true;
+		
+		try {
+			this.contentEl.empty();
+			this.contentEl.style.height = "100%";
+			this.contentEl.style.display = "flex";
+			this.contentEl.style.flexDirection = "column";
+			this.contentEl.createEl("h4", { text: "Scripture Context" });
+			
+			const activeFile = this.app.workspace.getActiveFile();
+			if (!activeFile) {
+				this.contentEl.createEl("p", { text: "No active file" });
+				return;
+			}
+			
+			// Parse the filename to extract book, chapter, and verse
+			// Expected format: "Book Name Chapter.Verse" (e.g., "1 Nephi 3.7")
+			const filename = activeFile.basename;
+			const match = filename.match(/^(.+?)\s+(\d+)\.(\d+)$/);
+			
+			if (!match) {
+				this.contentEl.createEl("p", { text: "Not a scripture verse file" });
+				return;
+			}
+			
+			const bookName = match[1];
+			const chapter = match[2];
+			const verse = match[3];
+			
+			// Determine which JSON file to load based on the book
+			const dataFile = this.getDataFileForBook(bookName);
+			if (!dataFile) {
+				this.contentEl.createEl("p", { text: `Unknown book: ${bookName}` });
+				return;
+			}
+			
+			try {
+				// Load the JSON data
+				const dataPath = `data/${dataFile}`;
+				const adapter = this.app.vault.adapter;
+				const basePath = (this.plugin.manifest as any).dir;
+				const fullPath = `${basePath}/${dataPath}`;
+				
+				const jsonContent = await adapter.read(fullPath);
+				const scriptureData: ScriptureData = JSON.parse(jsonContent);
+				
+				// Get the chapter data
+				if (!scriptureData[bookName] || !scriptureData[bookName][chapter]) {
+					this.contentEl.createEl("p", { text: `Chapter ${chapter} not found in ${bookName}` });
+					return;
+				}
+				
+				const chapterData = scriptureData[bookName][chapter] as { [verse: string]: string };
+				
+				// Display current verse info
+				const currentVerseEl = this.contentEl.createDiv({ cls: "current-verse" });
+				currentVerseEl.createEl("h5", { text: `${bookName} ${chapter}:${verse}` });
+				
+				// Display chapter heading if available
+				const heading = scriptureData[bookName].heading;
+				if (heading && typeof heading === "string") {
+					const headingEl = this.contentEl.createDiv({ cls: "chapter-heading" });
+					headingEl.createEl("em", { text: heading });
+					headingEl.style.marginBottom = "10px";
+					headingEl.style.fontSize = "0.9em";
+					headingEl.style.color = "var(--text-muted)";
+				}
+				
+				// Display all verses in the chapter
+				const versesContainer = this.contentEl.createDiv({ cls: "chapter-verses" });
+				versesContainer.style.flex = "1";
+				versesContainer.style.overflowY = "auto";
+				versesContainer.style.marginTop = "10px";
+				
+				const verseNumbers = Object.keys(chapterData).sort((a, b) => parseInt(a) - parseInt(b));
+				for (const verseNum of verseNumbers) {
+					const verseEl = versesContainer.createDiv({ cls: "verse-item" });
+					verseEl.style.marginBottom = "10px";
+					verseEl.style.padding = "5px";
+					
+					// Highlight the current verse
+					if (verseNum === verse) {
+						verseEl.style.backgroundColor = "var(--background-modifier-border)";
+						verseEl.style.borderLeft = "3px solid var(--interactive-accent)";
+						verseEl.style.paddingLeft = "10px";
+					}
+					
+					const verseNumEl = verseEl.createEl("strong", { text: `${verseNum}. ` });
+					verseNumEl.style.marginRight = "5px";
+					verseEl.createSpan({ text: chapterData[verseNum] });
+				}
+				
+			} catch (error) {
+				console.error("Error loading scripture context:", error);
+				this.contentEl.createEl("p", { text: `Error loading context: ${error.message}` });
+			}
+		} finally {
+			this.isUpdating = false;
+		}
+	}
+
+	private getDataFileForBook(bookName: string): string | null {
+		// Map book names to their JSON files
+		const bookToFile: { [key: string]: string } = {
+			// Book of Mormon
+			"1 Nephi": "bom.json",
+			"2 Nephi": "bom.json",
+			"Jacob": "bom.json",
+			"Enos": "bom.json",
+			"Jarom": "bom.json",
+			"Omni": "bom.json",
+			"Words of Mormon": "bom.json",
+			"Mosiah": "bom.json",
+			"Alma": "bom.json",
+			"Helaman": "bom.json",
+			"3 Nephi": "bom.json",
+			"4 Nephi": "bom.json",
+			"Mormon": "bom.json",
+			"Ether": "bom.json",
+			"Moroni": "bom.json",
+			// Old Testament
+			"Genesis": "ot.json",
+			"Exodus": "ot.json",
+			"Leviticus": "ot.json",
+			"Numbers": "ot.json",
+			"Deuteronomy": "ot.json",
+			"Joshua": "ot.json",
+			"Judges": "ot.json",
+			"Ruth": "ot.json",
+			"1 Samuel": "ot.json",
+			"2 Samuel": "ot.json",
+			"1 Kings": "ot.json",
+			"2 Kings": "ot.json",
+			"1 Chronicles": "ot.json",
+			"2 Chronicles": "ot.json",
+			"Ezra": "ot.json",
+			"Nehemiah": "ot.json",
+			"Esther": "ot.json",
+			"Job": "ot.json",
+			"Psalms": "ot.json",
+			"Proverbs": "ot.json",
+			"Ecclesiastes": "ot.json",
+			"Song of Solomon": "ot.json",
+			"Isaiah": "ot.json",
+			"Jeremiah": "ot.json",
+			"Lamentations": "ot.json",
+			"Ezekiel": "ot.json",
+			"Daniel": "ot.json",
+			"Hosea": "ot.json",
+			"Joel": "ot.json",
+			"Amos": "ot.json",
+			"Obadiah": "ot.json",
+			"Jonah": "ot.json",
+			"Micah": "ot.json",
+			"Nahum": "ot.json",
+			"Habakkuk": "ot.json",
+			"Zephaniah": "ot.json",
+			"Haggai": "ot.json",
+			"Zechariah": "ot.json",
+			"Malachi": "ot.json",
+			// New Testament
+			"Matthew": "nt.json",
+			"Mark": "nt.json",
+			"Luke": "nt.json",
+			"John": "nt.json",
+			"Acts": "nt.json",
+			"Romans": "nt.json",
+			"1 Corinthians": "nt.json",
+			"2 Corinthians": "nt.json",
+			"Galatians": "nt.json",
+			"Ephesians": "nt.json",
+			"Philippians": "nt.json",
+			"Colossians": "nt.json",
+			"1 Thessalonians": "nt.json",
+			"2 Thessalonians": "nt.json",
+			"1 Timothy": "nt.json",
+			"2 Timothy": "nt.json",
+			"Titus": "nt.json",
+			"Philemon": "nt.json",
+			"Hebrews": "nt.json",
+			"James": "nt.json",
+			"1 Peter": "nt.json",
+			"2 Peter": "nt.json",
+			"1 John": "nt.json",
+			"2 John": "nt.json",
+			"3 John": "nt.json",
+			"Jude": "nt.json",
+			"Revelation": "nt.json",
+			// D&C
+			"D&C": "dac.json",
+			"Official Declaration": "dac.json",
+			// Pearl of Great Price
+			"Moses": "pogp.json",
+			"Abraham": "pogp.json",
+			"Joseph Smith Matthew": "pogp.json",
+			"Joseph Smith History": "pogp.json",
+			"Articles of Faith": "pogp.json"
+		};
+		
+		return bookToFile[bookName] || null;
+	}
+
+	async onClose(): Promise<void> {
+		// Clean up when view is closed
+	}
+}
+
 export default class SqlitePlugin extends Plugin {
 	settings: SqlitePluginSettings;
 	SQL: SqlJsStatic | null = null;
@@ -111,6 +373,21 @@ export default class SqlitePlugin extends Plugin {
 		await this.loadSqlJs();
 		await this.loadDatabase();
 		console.log("Loading LDSS Plugin");
+
+		// Register the custom view
+		this.registerView(
+			VIEW_TYPE_SCRIPTURE_CONTEXT,
+			(leaf) => new ScriptureContextView(leaf, this)
+		);
+
+		// Add command to open the custom view
+		this.addCommand({
+			id: "open-scripture-context-view",
+			name: "Open Scripture Context View",
+			callback: () => {
+				this.activateView();
+			}
+		});
 
 		this.observer = new MutationObserver((mutations) => {
 			for (const mutation of mutations) {
@@ -202,6 +479,9 @@ export default class SqlitePlugin extends Plugin {
 		});
 
 		this.addSettingTab(new SqlitePluginSettingTab(this.app, this));
+		
+		// Open Scripture Context View by default
+		this.activateView();
 	}
 
 	private async displayResults(tries: number = 0) {
@@ -348,10 +628,31 @@ export default class SqlitePlugin extends Plugin {
 		}
 	}
 
+	async activateView() {
+		const { workspace } = this.app;
+
+		let leaf = workspace.getLeavesOfType(VIEW_TYPE_SCRIPTURE_CONTEXT)[0];
+
+		if (!leaf) {
+			// Create new leaf in right sidebar
+			leaf = workspace.getRightLeaf(false);
+			await leaf.setViewState({
+				type: VIEW_TYPE_SCRIPTURE_CONTEXT,
+				active: true,
+			});
+		}
+
+		// Reveal the leaf
+		workspace.revealLeaf(leaf);
+	}
+
 	onunload() {
 		this.db?.close();
 		this.db = null;
 		this.observer.disconnect();
+
+		// Clean up the custom view
+		this.app.workspace.detachLeavesOfType(VIEW_TYPE_SCRIPTURE_CONTEXT);
 	}
 
 	async loadSqlJs() {

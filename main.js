@@ -2455,6 +2455,214 @@ var abbreviations = {
   "JS\u2014H": "Joseph Smith History",
   "A of F": "Articles of Faith"
 };
+var VIEW_TYPE_SCRIPTURE_CONTEXT = "scripture-context-view";
+var ScriptureContextView = class extends import_obsidian.ItemView {
+  constructor(leaf, plugin) {
+    super(leaf);
+    this.isUpdating = false;
+    this.plugin = plugin;
+  }
+  getViewType() {
+    return VIEW_TYPE_SCRIPTURE_CONTEXT;
+  }
+  getDisplayText() {
+    return "Scripture Context Viewer";
+  }
+  getIcon() {
+    return "book-open";
+  }
+  async onOpen() {
+    const container = this.containerEl.children[1];
+    container.empty();
+    this.contentEl = container.createDiv();
+    this.contentEl.style.height = "100%";
+    this.contentEl.style.display = "flex";
+    this.contentEl.style.flexDirection = "column";
+    this.registerEvent(
+      this.app.workspace.on("active-leaf-change", () => {
+        this.updateContext();
+      })
+    );
+    this.updateContext();
+  }
+  async updateContext() {
+    if (!this.contentEl || this.isUpdating)
+      return;
+    this.isUpdating = true;
+    try {
+      this.contentEl.empty();
+      this.contentEl.style.height = "100%";
+      this.contentEl.style.display = "flex";
+      this.contentEl.style.flexDirection = "column";
+      this.contentEl.createEl("h4", { text: "Scripture Context" });
+      const activeFile = this.app.workspace.getActiveFile();
+      if (!activeFile) {
+        this.contentEl.createEl("p", { text: "No active file" });
+        return;
+      }
+      const filename = activeFile.basename;
+      const match = filename.match(/^(.+?)\s+(\d+)\.(\d+)$/);
+      if (!match) {
+        this.contentEl.createEl("p", { text: "Not a scripture verse file" });
+        return;
+      }
+      const bookName = match[1];
+      const chapter = match[2];
+      const verse = match[3];
+      const dataFile = this.getDataFileForBook(bookName);
+      if (!dataFile) {
+        this.contentEl.createEl("p", { text: `Unknown book: ${bookName}` });
+        return;
+      }
+      try {
+        const dataPath = `data/${dataFile}`;
+        const adapter = this.app.vault.adapter;
+        const basePath = this.plugin.manifest.dir;
+        const fullPath = `${basePath}/${dataPath}`;
+        const jsonContent = await adapter.read(fullPath);
+        const scriptureData = JSON.parse(jsonContent);
+        if (!scriptureData[bookName] || !scriptureData[bookName][chapter]) {
+          this.contentEl.createEl("p", { text: `Chapter ${chapter} not found in ${bookName}` });
+          return;
+        }
+        const chapterData = scriptureData[bookName][chapter];
+        const currentVerseEl = this.contentEl.createDiv({ cls: "current-verse" });
+        currentVerseEl.createEl("h5", { text: `${bookName} ${chapter}:${verse}` });
+        const heading = scriptureData[bookName].heading;
+        if (heading && typeof heading === "string") {
+          const headingEl = this.contentEl.createDiv({ cls: "chapter-heading" });
+          headingEl.createEl("em", { text: heading });
+          headingEl.style.marginBottom = "10px";
+          headingEl.style.fontSize = "0.9em";
+          headingEl.style.color = "var(--text-muted)";
+        }
+        const versesContainer = this.contentEl.createDiv({ cls: "chapter-verses" });
+        versesContainer.style.flex = "1";
+        versesContainer.style.overflowY = "auto";
+        versesContainer.style.marginTop = "10px";
+        const verseNumbers = Object.keys(chapterData).sort((a, b) => parseInt(a) - parseInt(b));
+        for (const verseNum of verseNumbers) {
+          const verseEl = versesContainer.createDiv({ cls: "verse-item" });
+          verseEl.style.marginBottom = "10px";
+          verseEl.style.padding = "5px";
+          if (verseNum === verse) {
+            verseEl.style.backgroundColor = "var(--background-modifier-border)";
+            verseEl.style.borderLeft = "3px solid var(--interactive-accent)";
+            verseEl.style.paddingLeft = "10px";
+          }
+          const verseNumEl = verseEl.createEl("strong", { text: `${verseNum}. ` });
+          verseNumEl.style.marginRight = "5px";
+          verseEl.createSpan({ text: chapterData[verseNum] });
+        }
+      } catch (error) {
+        console.error("Error loading scripture context:", error);
+        this.contentEl.createEl("p", { text: `Error loading context: ${error.message}` });
+      }
+    } finally {
+      this.isUpdating = false;
+    }
+  }
+  getDataFileForBook(bookName) {
+    const bookToFile = {
+      // Book of Mormon
+      "1 Nephi": "bom.json",
+      "2 Nephi": "bom.json",
+      "Jacob": "bom.json",
+      "Enos": "bom.json",
+      "Jarom": "bom.json",
+      "Omni": "bom.json",
+      "Words of Mormon": "bom.json",
+      "Mosiah": "bom.json",
+      "Alma": "bom.json",
+      "Helaman": "bom.json",
+      "3 Nephi": "bom.json",
+      "4 Nephi": "bom.json",
+      "Mormon": "bom.json",
+      "Ether": "bom.json",
+      "Moroni": "bom.json",
+      // Old Testament
+      "Genesis": "ot.json",
+      "Exodus": "ot.json",
+      "Leviticus": "ot.json",
+      "Numbers": "ot.json",
+      "Deuteronomy": "ot.json",
+      "Joshua": "ot.json",
+      "Judges": "ot.json",
+      "Ruth": "ot.json",
+      "1 Samuel": "ot.json",
+      "2 Samuel": "ot.json",
+      "1 Kings": "ot.json",
+      "2 Kings": "ot.json",
+      "1 Chronicles": "ot.json",
+      "2 Chronicles": "ot.json",
+      "Ezra": "ot.json",
+      "Nehemiah": "ot.json",
+      "Esther": "ot.json",
+      "Job": "ot.json",
+      "Psalms": "ot.json",
+      "Proverbs": "ot.json",
+      "Ecclesiastes": "ot.json",
+      "Song of Solomon": "ot.json",
+      "Isaiah": "ot.json",
+      "Jeremiah": "ot.json",
+      "Lamentations": "ot.json",
+      "Ezekiel": "ot.json",
+      "Daniel": "ot.json",
+      "Hosea": "ot.json",
+      "Joel": "ot.json",
+      "Amos": "ot.json",
+      "Obadiah": "ot.json",
+      "Jonah": "ot.json",
+      "Micah": "ot.json",
+      "Nahum": "ot.json",
+      "Habakkuk": "ot.json",
+      "Zephaniah": "ot.json",
+      "Haggai": "ot.json",
+      "Zechariah": "ot.json",
+      "Malachi": "ot.json",
+      // New Testament
+      "Matthew": "nt.json",
+      "Mark": "nt.json",
+      "Luke": "nt.json",
+      "John": "nt.json",
+      "Acts": "nt.json",
+      "Romans": "nt.json",
+      "1 Corinthians": "nt.json",
+      "2 Corinthians": "nt.json",
+      "Galatians": "nt.json",
+      "Ephesians": "nt.json",
+      "Philippians": "nt.json",
+      "Colossians": "nt.json",
+      "1 Thessalonians": "nt.json",
+      "2 Thessalonians": "nt.json",
+      "1 Timothy": "nt.json",
+      "2 Timothy": "nt.json",
+      "Titus": "nt.json",
+      "Philemon": "nt.json",
+      "Hebrews": "nt.json",
+      "James": "nt.json",
+      "1 Peter": "nt.json",
+      "2 Peter": "nt.json",
+      "1 John": "nt.json",
+      "2 John": "nt.json",
+      "3 John": "nt.json",
+      "Jude": "nt.json",
+      "Revelation": "nt.json",
+      // D&C
+      "D&C": "dac.json",
+      "Official Declaration": "dac.json",
+      // Pearl of Great Price
+      "Moses": "pogp.json",
+      "Abraham": "pogp.json",
+      "Joseph Smith Matthew": "pogp.json",
+      "Joseph Smith History": "pogp.json",
+      "Articles of Faith": "pogp.json"
+    };
+    return bookToFile[bookName] || null;
+  }
+  async onClose() {
+  }
+};
 var SqlitePlugin = class extends import_obsidian.Plugin {
   constructor() {
     super(...arguments);
@@ -2466,6 +2674,17 @@ var SqlitePlugin = class extends import_obsidian.Plugin {
     await this.loadSqlJs();
     await this.loadDatabase();
     console.log("Loading LDSS Plugin");
+    this.registerView(
+      VIEW_TYPE_SCRIPTURE_CONTEXT,
+      (leaf) => new ScriptureContextView(leaf, this)
+    );
+    this.addCommand({
+      id: "open-scripture-context-view",
+      name: "Open Scripture Context View",
+      callback: () => {
+        this.activateView();
+      }
+    });
     this.observer = new MutationObserver((mutations) => {
       for (const mutation of mutations) {
         if (mutation.type === "childList") {
@@ -2540,6 +2759,7 @@ ${content}`).open();
       }
     });
     this.addSettingTab(new SqlitePluginSettingTab(this.app, this));
+    this.activateView();
   }
   async displayResults(tries = 0) {
     const activeFile = this.app.workspace.getActiveFile();
@@ -2660,10 +2880,23 @@ ${content}`).open();
       });
     }
   }
+  async activateView() {
+    const { workspace } = this.app;
+    let leaf = workspace.getLeavesOfType(VIEW_TYPE_SCRIPTURE_CONTEXT)[0];
+    if (!leaf) {
+      leaf = workspace.getRightLeaf(false);
+      await leaf.setViewState({
+        type: VIEW_TYPE_SCRIPTURE_CONTEXT,
+        active: true
+      });
+    }
+    workspace.revealLeaf(leaf);
+  }
   onunload() {
     this.db?.close();
     this.db = null;
     this.observer.disconnect();
+    this.app.workspace.detachLeavesOfType(VIEW_TYPE_SCRIPTURE_CONTEXT);
   }
   async loadSqlJs() {
     this.SQL = await (0, import_sql.default)({
