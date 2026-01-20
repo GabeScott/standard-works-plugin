@@ -2460,6 +2460,10 @@ var ScriptureContextView = class extends import_obsidian.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.isUpdating = false;
+    this.currentFile = null;
+    this.currentBook = null;
+    this.currentChapter = null;
+    this.currentVerse = null;
     this.plugin = plugin;
   }
   getViewType() {
@@ -2488,27 +2492,65 @@ var ScriptureContextView = class extends import_obsidian.ItemView {
   async updateContext() {
     if (!this.contentEl || this.isUpdating)
       return;
+    const activeFile = this.app.workspace.getActiveFile();
+    const currentFilePath = activeFile?.path || null;
+    if (currentFilePath === this.currentFile)
+      return;
+    this.currentFile = currentFilePath;
+    if (!activeFile) {
+      this.isUpdating = true;
+      try {
+        this.contentEl.empty();
+        this.contentEl.style.height = "100%";
+        this.contentEl.style.display = "flex";
+        this.contentEl.style.flexDirection = "column";
+        this.contentEl.createEl("h4", { text: "Scripture Context" });
+        this.contentEl.createEl("p", { text: "No active file" });
+        this.currentBook = null;
+        this.currentChapter = null;
+        this.currentVerse = null;
+      } finally {
+        this.isUpdating = false;
+      }
+      return;
+    }
+    const filename = activeFile.basename;
+    const match = filename.match(/^(.+?)\s+(\d+)\.(\d+)$/);
+    if (!match) {
+      this.isUpdating = true;
+      try {
+        this.contentEl.empty();
+        this.contentEl.style.height = "100%";
+        this.contentEl.style.display = "flex";
+        this.contentEl.style.flexDirection = "column";
+        this.contentEl.createEl("h4", { text: "Scripture Context" });
+        this.contentEl.createEl("p", { text: "Not a scripture verse file" });
+        this.currentBook = null;
+        this.currentChapter = null;
+        this.currentVerse = null;
+      } finally {
+        this.isUpdating = false;
+      }
+      return;
+    }
+    const bookName = match[1];
+    const chapter = match[2];
+    const verse = match[3];
+    if (bookName === this.currentBook && chapter === this.currentChapter) {
+      this.currentVerse = verse;
+      this.updateHighlighting(verse);
+      return;
+    }
     this.isUpdating = true;
+    this.currentBook = bookName;
+    this.currentChapter = chapter;
+    this.currentVerse = verse;
     try {
       this.contentEl.empty();
       this.contentEl.style.height = "100%";
       this.contentEl.style.display = "flex";
       this.contentEl.style.flexDirection = "column";
       this.contentEl.createEl("h4", { text: "Scripture Context" });
-      const activeFile = this.app.workspace.getActiveFile();
-      if (!activeFile) {
-        this.contentEl.createEl("p", { text: "No active file" });
-        return;
-      }
-      const filename = activeFile.basename;
-      const match = filename.match(/^(.+?)\s+(\d+)\.(\d+)$/);
-      if (!match) {
-        this.contentEl.createEl("p", { text: "Not a scripture verse file" });
-        return;
-      }
-      const bookName = match[1];
-      const chapter = match[2];
-      const verse = match[3];
       const dataFile = this.getDataFileForBook(bookName);
       if (!dataFile) {
         this.contentEl.createEl("p", { text: `Unknown book: ${bookName}` });
@@ -2549,6 +2591,9 @@ var ScriptureContextView = class extends import_obsidian.ItemView {
             verseEl.style.backgroundColor = "var(--background-modifier-border)";
             verseEl.style.borderLeft = "3px solid var(--interactive-accent)";
             verseEl.style.paddingLeft = "10px";
+            setTimeout(() => {
+              verseEl.scrollIntoView({ behavior: "smooth", block: "center" });
+            }, 100);
           }
           const verseNumEl = verseEl.createEl("strong", { text: `${verseNum}. ` });
           verseNumEl.style.marginRight = "5px";
@@ -2659,6 +2704,43 @@ var ScriptureContextView = class extends import_obsidian.ItemView {
       "Articles of Faith": "pogp.json"
     };
     return bookToFile[bookName] || null;
+  }
+  updateHighlighting(newVerse) {
+    const versesContainer = this.contentEl.querySelector(".chapter-verses");
+    if (!versesContainer)
+      return;
+    const verseItems = versesContainer.querySelectorAll(".verse-item");
+    let targetVerse = null;
+    verseItems.forEach((verseEl) => {
+      const verseNumEl = verseEl.querySelector("strong");
+      if (!verseNumEl)
+        return;
+      const verseNum = verseNumEl.textContent?.replace(".", "").trim();
+      if (verseNum === newVerse) {
+        verseEl.style.backgroundColor = "var(--background-modifier-border)";
+        verseEl.style.borderLeft = "3px solid var(--interactive-accent)";
+        verseEl.style.paddingLeft = "10px";
+        targetVerse = verseEl;
+      } else {
+        verseEl.style.backgroundColor = "";
+        verseEl.style.borderLeft = "";
+        verseEl.style.paddingLeft = "5px";
+      }
+    });
+    if (targetVerse) {
+      requestAnimationFrame(() => {
+        if (!targetVerse || !versesContainer)
+          return;
+        const containerRect = versesContainer.getBoundingClientRect();
+        const targetRect = targetVerse.getBoundingClientRect();
+        const relativeTop = targetRect.top - containerRect.top;
+        const scrollTarget = versesContainer.scrollTop + relativeTop - containerRect.height / 2 + targetRect.height / 2;
+        versesContainer.scrollTo({
+          top: scrollTarget,
+          behavior: "smooth"
+        });
+      });
+    }
   }
   async onClose() {
   }

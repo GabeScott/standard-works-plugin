@@ -115,6 +115,10 @@ class ScriptureContextView extends ItemView {
 	private plugin: SqlitePlugin;
 	private contentEl: HTMLElement;
 	private isUpdating: boolean = false;
+	private currentFile: string | null = null;
+	private currentBook: string | null = null;
+	private currentChapter: string | null = null;
+	private currentVerse: string | null = null;
 
 	constructor(leaf: WorkspaceLeaf, plugin: SqlitePlugin) {
 		super(leaf);
@@ -155,7 +159,71 @@ class ScriptureContextView extends ItemView {
 	async updateContext(): Promise<void> {
 		if (!this.contentEl || this.isUpdating) return;
 		
+		const activeFile = this.app.workspace.getActiveFile();
+		const currentFilePath = activeFile?.path || null;
+		
+		// Only update if the file has actually changed
+		if (currentFilePath === this.currentFile) return;
+		
+		this.currentFile = currentFilePath;
+		
+		if (!activeFile) {
+			this.isUpdating = true;
+			try {
+				this.contentEl.empty();
+				this.contentEl.style.height = "100%";
+				this.contentEl.style.display = "flex";
+				this.contentEl.style.flexDirection = "column";
+				this.contentEl.createEl("h4", { text: "Scripture Context" });
+				this.contentEl.createEl("p", { text: "No active file" });
+				this.currentBook = null;
+				this.currentChapter = null;
+				this.currentVerse = null;
+			} finally {
+				this.isUpdating = false;
+			}
+			return;
+		}
+		
+		// Parse the filename to extract book, chapter, and verse
+		// Expected format: "Book Name Chapter.Verse" (e.g., "1 Nephi 3.7")
+		const filename = activeFile.basename;
+		const match = filename.match(/^(.+?)\s+(\d+)\.(\d+)$/);
+		
+		if (!match) {
+			this.isUpdating = true;
+			try {
+				this.contentEl.empty();
+				this.contentEl.style.height = "100%";
+				this.contentEl.style.display = "flex";
+				this.contentEl.style.flexDirection = "column";
+				this.contentEl.createEl("h4", { text: "Scripture Context" });
+				this.contentEl.createEl("p", { text: "Not a scripture verse file" });
+				this.currentBook = null;
+				this.currentChapter = null;
+				this.currentVerse = null;
+			} finally {
+				this.isUpdating = false;
+			}
+			return;
+		}
+		
+		const bookName = match[1];
+		const chapter = match[2];
+		const verse = match[3];
+		
+		// Check if we're in the same chapter - if so, just update highlighting
+		if (bookName === this.currentBook && chapter === this.currentChapter) {
+			this.currentVerse = verse;
+			this.updateHighlighting(verse);
+			return;
+		}
+		
+		// Different chapter - do full reload
 		this.isUpdating = true;
+		this.currentBook = bookName;
+		this.currentChapter = chapter;
+		this.currentVerse = verse;
 		
 		try {
 			this.contentEl.empty();
@@ -163,26 +231,6 @@ class ScriptureContextView extends ItemView {
 			this.contentEl.style.display = "flex";
 			this.contentEl.style.flexDirection = "column";
 			this.contentEl.createEl("h4", { text: "Scripture Context" });
-			
-			const activeFile = this.app.workspace.getActiveFile();
-			if (!activeFile) {
-				this.contentEl.createEl("p", { text: "No active file" });
-				return;
-			}
-			
-			// Parse the filename to extract book, chapter, and verse
-			// Expected format: "Book Name Chapter.Verse" (e.g., "1 Nephi 3.7")
-			const filename = activeFile.basename;
-			const match = filename.match(/^(.+?)\s+(\d+)\.(\d+)$/);
-			
-			if (!match) {
-				this.contentEl.createEl("p", { text: "Not a scripture verse file" });
-				return;
-			}
-			
-			const bookName = match[1];
-			const chapter = match[2];
-			const verse = match[3];
 			
 			// Determine which JSON file to load based on the book
 			const dataFile = this.getDataFileForBook(bookName);
@@ -240,6 +288,11 @@ class ScriptureContextView extends ItemView {
 						verseEl.style.backgroundColor = "var(--background-modifier-border)";
 						verseEl.style.borderLeft = "3px solid var(--interactive-accent)";
 						verseEl.style.paddingLeft = "10px";
+						
+						// Scroll to the current verse after a short delay to ensure DOM is ready
+						setTimeout(() => {
+							verseEl.scrollIntoView({ behavior: "smooth", block: "center" });
+						}, 100);
 					}
 					
 					const verseNumEl = verseEl.createEl("strong", { text: `${verseNum}. ` });
@@ -355,6 +408,55 @@ class ScriptureContextView extends ItemView {
 		};
 		
 		return bookToFile[bookName] || null;
+	}
+
+	private updateHighlighting(newVerse: string): void {
+		// Find all verse items in the current chapter
+		const versesContainer = this.contentEl.querySelector(".chapter-verses") as HTMLElement;
+		if (!versesContainer) return;
+		
+		const verseItems = versesContainer.querySelectorAll(".verse-item");
+		let targetVerse: HTMLElement | null = null;
+		
+		verseItems.forEach((verseEl) => {
+			const verseNumEl = verseEl.querySelector("strong");
+			if (!verseNumEl) return;
+			
+			// Extract verse number from the text (e.g., "7. " -> "7")
+			const verseNum = verseNumEl.textContent?.replace(".", "").trim();
+			
+			if (verseNum === newVerse) {
+				// Highlight this verse
+				(verseEl as HTMLElement).style.backgroundColor = "var(--background-modifier-border)";
+				(verseEl as HTMLElement).style.borderLeft = "3px solid var(--interactive-accent)";
+				(verseEl as HTMLElement).style.paddingLeft = "10px";
+				targetVerse = verseEl as HTMLElement;
+			} else {
+				// Remove highlighting from other verses
+				(verseEl as HTMLElement).style.backgroundColor = "";
+				(verseEl as HTMLElement).style.borderLeft = "";
+				(verseEl as HTMLElement).style.paddingLeft = "5px";
+			}
+		});
+		
+		// Scroll to the target verse after updating all styles
+		if (targetVerse) {
+			// Calculate the scroll position manually to avoid interruption
+			requestAnimationFrame(() => {
+				if (!targetVerse || !versesContainer) return;
+				
+				const containerRect = versesContainer.getBoundingClientRect();
+				const targetRect = targetVerse.getBoundingClientRect();
+				const relativeTop = targetRect.top - containerRect.top;
+				const scrollTarget = versesContainer.scrollTop + relativeTop - (containerRect.height / 2) + (targetRect.height / 2);
+				
+				// Use smooth scroll on the container
+				versesContainer.scrollTo({
+					top: scrollTarget,
+					behavior: "smooth"
+				});
+			});
+		}
 	}
 
 	async onClose(): Promise<void> {
