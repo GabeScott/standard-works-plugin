@@ -2753,6 +2753,17 @@ var SqlitePlugin = class extends import_obsidian.Plugin {
     super(...arguments);
     this.SQL = null;
     this.db = null;
+    // Store last search state
+    this.lastSearchTerm = "";
+    this.lastSearchResults = [];
+    this.lastSearchPage = 0;
+    this.lastSelectedWorks = {
+      ot: true,
+      nt: true,
+      bom: true,
+      dac: true,
+      pogp: true
+    };
   }
   async onload() {
     await this.loadSettings();
@@ -3320,6 +3331,11 @@ var ScriptureSearchModal = class extends import_obsidian.Modal {
   }
   onOpen() {
     const { contentEl } = this;
+    if (this.plugin.lastSearchResults.length > 0) {
+      this.searchResults = this.plugin.lastSearchResults;
+      this.searchTerm = this.plugin.lastSearchTerm;
+      this.currentPage = this.plugin.lastSearchPage;
+    }
     this.modalEl.style.width = "85%";
     this.modalEl.style.maxWidth = "1000px";
     contentEl.style.display = "flex";
@@ -3334,7 +3350,8 @@ var ScriptureSearchModal = class extends import_obsidian.Modal {
     const inputEl = searchContainer.createEl("input", {
       type: "text",
       attr: {
-        placeholder: "Enter search phrase..."
+        placeholder: "Enter search phrase...",
+        value: this.searchTerm
       }
     });
     inputEl.style.flex = "1";
@@ -3347,11 +3364,11 @@ var ScriptureSearchModal = class extends import_obsidian.Modal {
     checkboxContainer.style.display = "flex";
     checkboxContainer.style.gap = "15px";
     checkboxContainer.style.flexWrap = "wrap";
-    this.otCheckbox = this.createCheckbox(checkboxContainer, "Old Testament", true);
-    this.ntCheckbox = this.createCheckbox(checkboxContainer, "New Testament", true);
-    this.bomCheckbox = this.createCheckbox(checkboxContainer, "Book of Mormon", true);
-    this.dacCheckbox = this.createCheckbox(checkboxContainer, "D&C", true);
-    this.pogpCheckbox = this.createCheckbox(checkboxContainer, "Pearl of Great Price", true);
+    this.otCheckbox = this.createCheckbox(checkboxContainer, "Old Testament", this.plugin.lastSelectedWorks.ot);
+    this.ntCheckbox = this.createCheckbox(checkboxContainer, "New Testament", this.plugin.lastSelectedWorks.nt);
+    this.bomCheckbox = this.createCheckbox(checkboxContainer, "Book of Mormon", this.plugin.lastSelectedWorks.bom);
+    this.dacCheckbox = this.createCheckbox(checkboxContainer, "D&C", this.plugin.lastSelectedWorks.dac);
+    this.pogpCheckbox = this.createCheckbox(checkboxContainer, "Pearl of Great Price", this.plugin.lastSelectedWorks.pogp);
     this.resultsContainer = contentEl.createEl("div", { cls: "search-results-container" });
     this.resultsContainer.style.flex = "1";
     this.resultsContainer.style.overflowY = "auto";
@@ -3376,10 +3393,14 @@ var ScriptureSearchModal = class extends import_obsidian.Modal {
     searchBtn.addEventListener("click", () => {
       this.performSearch(inputEl.value);
     });
-    this.resultsContainer.createEl("p", {
-      text: "Enter a search phrase and click Search to find verses.",
-      attr: { style: "color: var(--text-muted); text-align: center; margin-top: 20px;" }
-    });
+    if (this.searchResults.length > 0) {
+      this.displayResults();
+    } else {
+      this.resultsContainer.createEl("p", {
+        text: "Enter a search phrase and click Search to find verses.",
+        attr: { style: "color: var(--text-muted); text-align: center; margin-top: 20px;" }
+      });
+    }
   }
   createCheckbox(container, label, checked) {
     const labelEl = container.createEl("label");
@@ -3426,6 +3447,15 @@ var ScriptureSearchModal = class extends import_obsidian.Modal {
       return;
     }
     this.searchResults = await this.plugin.searchScriptures(this.searchTerm, selectedWorks);
+    this.plugin.lastSearchTerm = this.searchTerm;
+    this.plugin.lastSearchResults = this.searchResults;
+    this.plugin.lastSelectedWorks = {
+      ot: this.otCheckbox.checked,
+      nt: this.ntCheckbox.checked,
+      bom: this.bomCheckbox.checked,
+      dac: this.dacCheckbox.checked,
+      pogp: this.pogpCheckbox.checked
+    };
     this.displayResults();
   }
   displayResults() {
@@ -3511,6 +3541,7 @@ var ScriptureSearchModal = class extends import_obsidian.Modal {
     prevBtn.addEventListener("click", () => {
       if (this.currentPage > 0) {
         this.currentPage--;
+        this.plugin.lastSearchPage = this.currentPage;
         this.displayResults();
         this.resultsContainer.scrollTop = 0;
       }
@@ -3525,6 +3556,7 @@ var ScriptureSearchModal = class extends import_obsidian.Modal {
     nextBtn.addEventListener("click", () => {
       if (this.currentPage < totalPages - 1) {
         this.currentPage++;
+        this.plugin.lastSearchPage = this.currentPage;
         this.displayResults();
         this.resultsContainer.scrollTop = 0;
       }

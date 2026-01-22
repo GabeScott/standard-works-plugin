@@ -485,6 +485,18 @@ export default class SqlitePlugin extends Plugin {
 	SQL: SqlJsStatic | null = null;
 	db: Database | null = null;
 	private observer: MutationObserver;
+	
+	// Store last search state
+	lastSearchTerm: string = "";
+	lastSearchResults: SearchResult[] = [];
+	lastSearchPage: number = 0;
+	lastSelectedWorks: { ot: boolean; nt: boolean; bom: boolean; dac: boolean; pogp: boolean } = {
+		ot: true,
+		nt: true,
+		bom: true,
+		dac: true,
+		pogp: true
+	};
 
 	async onload() {
 		await this.loadSettings();
@@ -1227,6 +1239,13 @@ class ScriptureSearchModal extends Modal {
 	onOpen() {
 		const { contentEl } = this;
 		
+		// Restore saved state
+		if (this.plugin.lastSearchResults.length > 0) {
+			this.searchResults = this.plugin.lastSearchResults;
+			this.searchTerm = this.plugin.lastSearchTerm;
+			this.currentPage = this.plugin.lastSearchPage;
+		}
+		
 		// Make modal wider
 		this.modalEl.style.width = "85%";
 		this.modalEl.style.maxWidth = "1000px";
@@ -1246,8 +1265,9 @@ class ScriptureSearchModal extends Modal {
 		
 		const inputEl = searchContainer.createEl("input", {
 			type: "text",
-			attr: {  
-				placeholder: "Enter search phrase..."
+			attr: { 
+				placeholder: "Enter search phrase...",
+				value: this.searchTerm
 			}
 		});
 		inputEl.style.flex = "1";
@@ -1264,12 +1284,12 @@ class ScriptureSearchModal extends Modal {
 		checkboxContainer.style.gap = "15px";
 		checkboxContainer.style.flexWrap = "wrap";
 		
-		// Create checkboxes for each work
-		this.otCheckbox = this.createCheckbox(checkboxContainer, "Old Testament", true);
-		this.ntCheckbox = this.createCheckbox(checkboxContainer, "New Testament", true);
-		this.bomCheckbox = this.createCheckbox(checkboxContainer, "Book of Mormon", true);
-		this.dacCheckbox = this.createCheckbox(checkboxContainer, "D&C", true);
-		this.pogpCheckbox = this.createCheckbox(checkboxContainer, "Pearl of Great Price", true);
+		// Create checkboxes for each work (restore saved state)
+		this.otCheckbox = this.createCheckbox(checkboxContainer, "Old Testament", this.plugin.lastSelectedWorks.ot);
+		this.ntCheckbox = this.createCheckbox(checkboxContainer, "New Testament", this.plugin.lastSelectedWorks.nt);
+		this.bomCheckbox = this.createCheckbox(checkboxContainer, "Book of Mormon", this.plugin.lastSelectedWorks.bom);
+		this.dacCheckbox = this.createCheckbox(checkboxContainer, "D&C", this.plugin.lastSelectedWorks.dac);
+		this.pogpCheckbox = this.createCheckbox(checkboxContainer, "Pearl of Great Price", this.plugin.lastSelectedWorks.pogp);
 		
 		// Results container
 		this.resultsContainer = contentEl.createEl("div", { cls: "search-results-container" });
@@ -1305,11 +1325,15 @@ class ScriptureSearchModal extends Modal {
 			this.performSearch(inputEl.value);
 		});
 		
-		// Initial message
-		this.resultsContainer.createEl("p", { 
-			text: "Enter a search phrase and click Search to find verses.",
-			attr: { style: "color: var(--text-muted); text-align: center; margin-top: 20px;" }
-		});
+		// Initial message or display saved results
+		if (this.searchResults.length > 0) {
+			this.displayResults();
+		} else {
+			this.resultsContainer.createEl("p", { 
+				text: "Enter a search phrase and click Search to find verses.",
+				attr: { style: "color: var(--text-muted); text-align: center; margin-top: 20px;" }
+			});
+		}
 	}
 	
 	private createCheckbox(container: HTMLElement, label: string, checked: boolean): HTMLInputElement {
@@ -1364,6 +1388,17 @@ class ScriptureSearchModal extends Modal {
 		
 		// Perform the search
 		this.searchResults = await this.plugin.searchScriptures(this.searchTerm, selectedWorks);
+		
+		// Save search state to plugin
+		this.plugin.lastSearchTerm = this.searchTerm;
+		this.plugin.lastSearchResults = this.searchResults;
+		this.plugin.lastSelectedWorks = {
+			ot: this.otCheckbox.checked,
+			nt: this.ntCheckbox.checked,
+			bom: this.bomCheckbox.checked,
+			dac: this.dacCheckbox.checked,
+			pogp: this.pogpCheckbox.checked
+		};
 		
 		// Display results
 		this.displayResults();
@@ -1479,6 +1514,7 @@ class ScriptureSearchModal extends Modal {
 		prevBtn.addEventListener("click", () => {
 			if (this.currentPage > 0) {
 				this.currentPage--;
+				this.plugin.lastSearchPage = this.currentPage;
 				this.displayResults();
 				this.resultsContainer.scrollTop = 0;
 			}
@@ -1497,6 +1533,7 @@ class ScriptureSearchModal extends Modal {
 		nextBtn.addEventListener("click", () => {
 			if (this.currentPage < totalPages - 1) {
 				this.currentPage++;
+				this.plugin.lastSearchPage = this.currentPage;
 				this.displayResults();
 				this.resultsContainer.scrollTop = 0;
 			}
