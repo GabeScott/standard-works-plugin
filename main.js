@@ -2852,6 +2852,13 @@ ${content}`).open();
         this.displayResults();
       }
     });
+    this.addCommand({
+      id: "search-scripture-text",
+      name: "Search Scripture Text",
+      callback: () => {
+        new ScriptureSearchModal(this.app, this).open();
+      }
+    });
     this.addSettingTab(new SqlitePluginSettingTab(this.app, this));
     this.activateView();
   }
@@ -3149,6 +3156,44 @@ ${content}`).open();
     }
     this.app.workspace.getLeaf().openFile(targetFile);
   }
+  async searchScriptures(searchTerm, dataFiles) {
+    const results = [];
+    const searchLower = searchTerm.toLowerCase();
+    const adapter = this.app.vault.adapter;
+    const basePath = this.manifest.dir;
+    for (const dataFile of dataFiles) {
+      try {
+        const fullPath = `${basePath}/data/${dataFile}`;
+        const jsonContent = await adapter.read(fullPath);
+        const scriptureData = JSON.parse(jsonContent);
+        for (const bookName in scriptureData) {
+          const bookData = scriptureData[bookName];
+          for (const chapterKey in bookData) {
+            if (chapterKey === "heading")
+              continue;
+            const chapterData = bookData[chapterKey];
+            if (typeof chapterData === "object" && chapterData !== null) {
+              for (const verseKey in chapterData) {
+                const verseText = chapterData[verseKey];
+                if (verseText.toLowerCase().includes(searchLower)) {
+                  results.push({
+                    book: bookName,
+                    chapter: chapterKey,
+                    verse: verseKey,
+                    text: verseText
+                  });
+                }
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.error(`Error loading scripture data from ${dataFile}:`, error);
+        new import_obsidian.Notice(`Error loading ${dataFile}`);
+      }
+    }
+    return results;
+  }
 };
 var ResultsModal = class extends import_obsidian.Modal {
   constructor(app, results) {
@@ -3258,6 +3303,231 @@ var GoToVerseModal = class extends import_obsidian.Modal {
     submitBtn.addEventListener("click", () => {
       this.onSubmit(inputEl.value);
       this.close();
+    });
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+};
+var ScriptureSearchModal = class extends import_obsidian.Modal {
+  constructor(app, plugin) {
+    super(app);
+    this.searchResults = [];
+    this.currentPage = 0;
+    this.resultsPerPage = 50;
+    this.searchTerm = "";
+    this.plugin = plugin;
+  }
+  onOpen() {
+    const { contentEl } = this;
+    this.modalEl.style.width = "85%";
+    this.modalEl.style.maxWidth = "1000px";
+    contentEl.style.display = "flex";
+    contentEl.style.flexDirection = "column";
+    contentEl.style.overflow = "hidden";
+    contentEl.createEl("h2", { text: "Search Scriptures" });
+    const searchContainer = contentEl.createEl("div", { cls: "search-input-container" });
+    searchContainer.style.marginBottom = "15px";
+    searchContainer.style.display = "flex";
+    searchContainer.style.alignItems = "center";
+    searchContainer.style.gap = "10px";
+    const inputEl = searchContainer.createEl("input", {
+      type: "text",
+      attr: {
+        placeholder: "Enter search phrase..."
+      }
+    });
+    inputEl.style.flex = "1";
+    inputEl.style.padding = "8px 12px";
+    inputEl.style.paddingLeft = "32px";
+    const searchBtn = searchContainer.createEl("button", { text: "Search" });
+    searchBtn.style.padding = "8px 16px";
+    const checkboxContainer = contentEl.createEl("div", { cls: "scripture-works-checkboxes" });
+    checkboxContainer.style.marginBottom = "15px";
+    checkboxContainer.style.display = "flex";
+    checkboxContainer.style.gap = "15px";
+    checkboxContainer.style.flexWrap = "wrap";
+    this.otCheckbox = this.createCheckbox(checkboxContainer, "Old Testament", true);
+    this.ntCheckbox = this.createCheckbox(checkboxContainer, "New Testament", true);
+    this.bomCheckbox = this.createCheckbox(checkboxContainer, "Book of Mormon", true);
+    this.dacCheckbox = this.createCheckbox(checkboxContainer, "D&C", true);
+    this.pogpCheckbox = this.createCheckbox(checkboxContainer, "Pearl of Great Price", true);
+    this.resultsContainer = contentEl.createEl("div", { cls: "search-results-container" });
+    this.resultsContainer.style.flex = "1";
+    this.resultsContainer.style.overflowY = "auto";
+    this.resultsContainer.style.border = "1px solid var(--background-modifier-border)";
+    this.resultsContainer.style.borderRadius = "4px";
+    this.resultsContainer.style.padding = "10px";
+    this.resultsContainer.style.backgroundColor = "var(--background-secondary)";
+    this.resultsContainer.style.marginBottom = "10px";
+    this.paginationContainer = contentEl.createEl("div", { cls: "pagination-container" });
+    this.paginationContainer.style.display = "flex";
+    this.paginationContainer.style.justifyContent = "center";
+    this.paginationContainer.style.alignItems = "center";
+    this.paginationContainer.style.gap = "10px";
+    this.paginationContainer.style.paddingTop = "10px";
+    this.paginationContainer.style.borderTop = "1px solid var(--background-modifier-border)";
+    inputEl.focus();
+    inputEl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        this.performSearch(inputEl.value);
+      }
+    });
+    searchBtn.addEventListener("click", () => {
+      this.performSearch(inputEl.value);
+    });
+    this.resultsContainer.createEl("p", {
+      text: "Enter a search phrase and click Search to find verses.",
+      attr: { style: "color: var(--text-muted); text-align: center; margin-top: 20px;" }
+    });
+  }
+  createCheckbox(container, label, checked) {
+    const labelEl = container.createEl("label");
+    labelEl.style.display = "flex";
+    labelEl.style.alignItems = "center";
+    labelEl.style.gap = "5px";
+    labelEl.style.cursor = "pointer";
+    const checkbox = labelEl.createEl("input", {
+      attr: { type: "checkbox", checked }
+    });
+    checkbox.style.cursor = "pointer";
+    labelEl.appendText(label);
+    return checkbox;
+  }
+  async performSearch(searchPhrase) {
+    if (!searchPhrase || !searchPhrase.trim()) {
+      new import_obsidian.Notice("Please enter a search phrase");
+      return;
+    }
+    this.searchTerm = searchPhrase.trim();
+    this.currentPage = 0;
+    this.resultsContainer.empty();
+    this.resultsContainer.createEl("p", {
+      text: "Searching...",
+      attr: { style: "color: var(--text-muted); text-align: center; margin-top: 20px;" }
+    });
+    const selectedWorks = [];
+    if (this.otCheckbox.checked)
+      selectedWorks.push("ot.json");
+    if (this.ntCheckbox.checked)
+      selectedWorks.push("nt.json");
+    if (this.bomCheckbox.checked)
+      selectedWorks.push("bom.json");
+    if (this.dacCheckbox.checked)
+      selectedWorks.push("dac.json");
+    if (this.pogpCheckbox.checked)
+      selectedWorks.push("pogp.json");
+    if (selectedWorks.length === 0) {
+      this.resultsContainer.empty();
+      this.resultsContainer.createEl("p", {
+        text: "Please select at least one work to search.",
+        attr: { style: "color: var(--text-error); text-align: center; margin-top: 20px;" }
+      });
+      return;
+    }
+    this.searchResults = await this.plugin.searchScriptures(this.searchTerm, selectedWorks);
+    this.displayResults();
+  }
+  displayResults() {
+    this.resultsContainer.empty();
+    if (this.searchResults.length === 0) {
+      this.resultsContainer.createEl("p", {
+        text: `No results found for "${this.searchTerm}".`,
+        attr: { style: "color: var(--text-muted); text-align: center; margin-top: 20px;" }
+      });
+      this.paginationContainer.empty();
+      return;
+    }
+    const countEl = this.resultsContainer.createEl("div", {
+      text: `Found ${this.searchResults.length} result${this.searchResults.length === 1 ? "" : "s"}`,
+      cls: "search-result-count"
+    });
+    countEl.style.marginBottom = "15px";
+    countEl.style.fontWeight = "bold";
+    countEl.style.color = "var(--text-normal)";
+    const startIdx = this.currentPage * this.resultsPerPage;
+    const endIdx = Math.min(startIdx + this.resultsPerPage, this.searchResults.length);
+    const pageResults = this.searchResults.slice(startIdx, endIdx);
+    for (const result of pageResults) {
+      const resultEl = this.resultsContainer.createEl("div", { cls: "search-result-item" });
+      resultEl.style.marginBottom = "15px";
+      resultEl.style.padding = "10px";
+      resultEl.style.border = "1px solid var(--background-modifier-border)";
+      resultEl.style.borderRadius = "4px";
+      resultEl.style.backgroundColor = "var(--background-primary)";
+      const refLink = resultEl.createEl("a", {
+        text: `${result.book} ${result.chapter}:${result.verse}`,
+        cls: "search-result-reference"
+      });
+      refLink.style.fontWeight = "bold";
+      refLink.style.color = "var(--text-accent)";
+      refLink.style.cursor = "pointer";
+      refLink.style.marginBottom = "5px";
+      refLink.style.display = "block";
+      refLink.style.fontSize = "1.1em";
+      refLink.addEventListener("click", (e) => {
+        e.preventDefault();
+        const filename = `${result.book} ${result.chapter}.${result.verse}`;
+        const files = this.app.vault.getFiles();
+        let targetFile = null;
+        for (const file of files) {
+          if (file.name === `${filename}.md`) {
+            targetFile = file;
+            break;
+          }
+        }
+        if (targetFile) {
+          this.app.workspace.getLeaf().openFile(targetFile);
+          this.close();
+        } else {
+          new import_obsidian.Notice(`Verse file not found: ${filename}`);
+        }
+      });
+      const textEl = resultEl.createEl("div", { cls: "search-result-text" });
+      textEl.style.lineHeight = "1.6";
+      textEl.style.color = "var(--text-normal)";
+      textEl.innerHTML = this.highlightText(result.text, this.searchTerm);
+    }
+    this.updatePagination();
+  }
+  highlightText(text, searchTerm) {
+    const escapeHtml = (str) => {
+      const div = document.createElement("div");
+      div.textContent = str;
+      return div.innerHTML;
+    };
+    const escapedText = escapeHtml(text);
+    const regex = new RegExp(`(${searchTerm.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "gi");
+    return escapedText.replace(regex, '<mark style="background-color: var(--text-highlight-bg); color: var(--text-normal); padding: 2px 0;">$1</mark>');
+  }
+  updatePagination() {
+    this.paginationContainer.empty();
+    const totalPages = Math.ceil(this.searchResults.length / this.resultsPerPage);
+    if (totalPages <= 1)
+      return;
+    const prevBtn = this.paginationContainer.createEl("button", { text: "Previous" });
+    prevBtn.disabled = this.currentPage === 0;
+    prevBtn.style.padding = "5px 15px";
+    prevBtn.addEventListener("click", () => {
+      if (this.currentPage > 0) {
+        this.currentPage--;
+        this.displayResults();
+        this.resultsContainer.scrollTop = 0;
+      }
+    });
+    const pageInfo = this.paginationContainer.createEl("span", {
+      text: `Page ${this.currentPage + 1} of ${totalPages}`
+    });
+    pageInfo.style.color = "var(--text-muted)";
+    const nextBtn = this.paginationContainer.createEl("button", { text: "Next" });
+    nextBtn.disabled = this.currentPage >= totalPages - 1;
+    nextBtn.style.padding = "5px 15px";
+    nextBtn.addEventListener("click", () => {
+      if (this.currentPage < totalPages - 1) {
+        this.currentPage++;
+        this.displayResults();
+        this.resultsContainer.scrollTop = 0;
+      }
     });
   }
   onClose() {
