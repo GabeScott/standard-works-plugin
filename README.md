@@ -2,6 +2,8 @@
 
 An Obsidian plugin to supercharge your scripture study with structured links, commentary, and intelligent backlinks — all centered around the **Standard Works** of The Church of Jesus Christ of Latter-day Saints.
 
+Designed to work with my [standard-works-vault](https://github.com/GabeScott/standard-works-vault).
+
 ---
 
 ## ✨ Features
