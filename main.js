@@ -2497,6 +2497,30 @@ var ScriptureContextView = class extends import_obsidian.ItemView {
     toggleContainer.style.display = "flex";
     toggleContainer.style.alignItems = "center";
     toggleContainer.style.gap = "8px";
+    const searchContainer = this.contentEl.createDiv({ cls: "scripture-search-container" });
+    searchContainer.style.padding = "10px";
+    searchContainer.style.borderBottom = "1px solid var(--background-modifier-border)";
+    searchContainer.style.flexShrink = "0";
+    const searchInput = searchContainer.createEl("input", {
+      type: "text",
+      attr: { placeholder: "Go to verse (e.g., John 3:16 or John 3)" }
+    });
+    searchInput.style.width = "100%";
+    searchInput.style.padding = "8px 12px";
+    searchInput.style.boxSizing = "border-box";
+    searchInput.style.border = "1px solid var(--background-modifier-border)";
+    searchInput.style.borderRadius = "4px";
+    searchInput.style.backgroundColor = "var(--background-primary)";
+    searchInput.style.color = "var(--text-normal)";
+    searchInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        const reference = searchInput.value.trim();
+        if (reference) {
+          this.loadContextByReference(reference);
+          searchInput.value = "";
+        }
+      }
+    });
     const toggleLabel = toggleContainer.createEl("span", { text: "Update on file change" });
     toggleLabel.style.fontSize = "0.9em";
     toggleLabel.style.color = "var(--text-muted)";
@@ -2517,6 +2541,181 @@ var ScriptureContextView = class extends import_obsidian.ItemView {
       })
     );
     this.updateContext();
+  }
+  async loadContextByReference(reference) {
+    if (!this.contentContainer || this.isUpdating)
+      return;
+    let book = "";
+    let chapter = "";
+    let verse = "1";
+    if (reference.includes(":")) {
+      const parts = reference.split(" ");
+      const lastPart = parts[parts.length - 1];
+      const chapterVerse = lastPart.split(":");
+      book = parts.slice(0, -1).join(" ");
+      chapter = chapterVerse[0];
+      verse = chapterVerse[1];
+    } else {
+      const parts = reference.split(" ");
+      if (parts.length < 2) {
+        new import_obsidian.Notice("Invalid format. Use 'Book Chapter:Verse' or 'Book Chapter' (e.g., 'John 3:16' or 'John 3')");
+        return;
+      }
+      chapter = parts[parts.length - 1];
+      book = parts.slice(0, -1).join(" ");
+    }
+    for (const [key, value] of Object.entries(abbreviations)) {
+      if (book.includes(key)) {
+        book = book.replace(key, value);
+        break;
+      }
+    }
+    this.isUpdating = true;
+    this.currentBook = book;
+    this.currentChapter = chapter;
+    this.currentVerse = verse;
+    this.currentFile = null;
+    try {
+      this.contentContainer.empty();
+      const dataFile = this.getDataFileForBook(book);
+      if (!dataFile) {
+        this.contentContainer.createEl("p", { text: `Unknown book: ${book}` });
+        new import_obsidian.Notice(`Unknown book: ${book}`);
+        return;
+      }
+      try {
+        const dataPath = `data/${dataFile}`;
+        const adapter = this.app.vault.adapter;
+        const basePath = this.plugin.manifest.dir;
+        const fullPath = `${basePath}/${dataPath}`;
+        const jsonContent = await adapter.read(fullPath);
+        const scriptureData = JSON.parse(jsonContent);
+        if (!scriptureData[book] || !scriptureData[book][chapter]) {
+          this.contentContainer.createEl("p", { text: `Chapter ${chapter} not found in ${book}` });
+          new import_obsidian.Notice(`Chapter ${chapter} not found in ${book}`);
+          return;
+        }
+        const chapterData = scriptureData[book][chapter];
+        const currentVerseEl = this.contentContainer.createDiv({ cls: "current-verse" });
+        const chapterTitle = currentVerseEl.createEl("h5", { text: `${book} ${chapter}` });
+        chapterTitle.style.userSelect = "text";
+        chapterTitle.style.cursor = "text";
+        const heading = scriptureData[book].heading;
+        if (heading && typeof heading === "string") {
+          const headingEl = this.contentContainer.createDiv({ cls: "chapter-heading" });
+          const headingText = headingEl.createEl("em", { text: heading });
+          headingEl.style.marginBottom = "10px";
+          headingEl.style.fontSize = "0.9em";
+          headingEl.style.color = "var(--text-muted)";
+          headingEl.style.userSelect = "text";
+          headingEl.style.cursor = "text";
+        }
+        const versesContainer = this.contentContainer.createDiv({ cls: "chapter-verses" });
+        versesContainer.style.marginTop = "10px";
+        const verseNumbers = Object.keys(chapterData).sort((a, b) => parseInt(a) - parseInt(b));
+        for (const verseNum of verseNumbers) {
+          const verseEl = versesContainer.createDiv({ cls: "verse-item" });
+          verseEl.style.marginBottom = "10px";
+          verseEl.style.padding = "5px";
+          verseEl.style.userSelect = "text";
+          verseEl.style.cursor = "text";
+          if (verseNum === verse) {
+            verseEl.style.backgroundColor = "var(--background-modifier-border)";
+            verseEl.style.borderLeft = "3px solid var(--interactive-accent)";
+            verseEl.style.paddingLeft = "10px";
+            setTimeout(() => {
+              verseEl.scrollIntoView({ behavior: "smooth", block: "center" });
+            }, 500);
+          }
+          const verseNumEl = verseEl.createEl("strong", { text: `${verseNum}. ` });
+          verseNumEl.style.marginRight = "5px";
+          verseEl.createSpan({ text: chapterData[verseNum] });
+        }
+      } catch (error) {
+        console.error("Error loading scripture context:", error);
+        this.contentContainer.createEl("p", { text: `Error loading context: ${error.message}` });
+        new import_obsidian.Notice(`Error loading scripture: ${error.message}`);
+      }
+    } finally {
+      this.isUpdating = false;
+    }
+  }
+  async loadContextForFile(file) {
+    if (!this.contentContainer || this.isUpdating)
+      return;
+    const filename = file.basename;
+    const match = filename.match(/^(.+?)\s+(\d+)\.(\d+)$/);
+    if (!match)
+      return;
+    const bookName = match[1];
+    const chapter = match[2];
+    const verse = match[3];
+    this.isUpdating = true;
+    this.currentBook = bookName;
+    this.currentChapter = chapter;
+    this.currentVerse = verse;
+    this.currentFile = file.path;
+    try {
+      this.contentContainer.empty();
+      const dataFile = this.getDataFileForBook(bookName);
+      if (!dataFile) {
+        this.contentContainer.createEl("p", { text: `Unknown book: ${bookName}` });
+        return;
+      }
+      try {
+        const dataPath = `data/${dataFile}`;
+        const adapter = this.app.vault.adapter;
+        const basePath = this.plugin.manifest.dir;
+        const fullPath = `${basePath}/${dataPath}`;
+        const jsonContent = await adapter.read(fullPath);
+        const scriptureData = JSON.parse(jsonContent);
+        if (!scriptureData[bookName] || !scriptureData[bookName][chapter]) {
+          this.contentContainer.createEl("p", { text: `Chapter ${chapter} not found in ${bookName}` });
+          return;
+        }
+        const chapterData = scriptureData[bookName][chapter];
+        const currentVerseEl = this.contentContainer.createDiv({ cls: "current-verse" });
+        const chapterTitle = currentVerseEl.createEl("h5", { text: `${bookName} ${chapter}` });
+        chapterTitle.style.userSelect = "text";
+        chapterTitle.style.cursor = "text";
+        const heading = scriptureData[bookName].heading;
+        if (heading && typeof heading === "string") {
+          const headingEl = this.contentContainer.createDiv({ cls: "chapter-heading" });
+          const headingText = headingEl.createEl("em", { text: heading });
+          headingEl.style.marginBottom = "10px";
+          headingEl.style.fontSize = "0.9em";
+          headingEl.style.color = "var(--text-muted)";
+          headingEl.style.userSelect = "text";
+          headingEl.style.cursor = "text";
+        }
+        const versesContainer = this.contentContainer.createDiv({ cls: "chapter-verses" });
+        versesContainer.style.marginTop = "10px";
+        const verseNumbers = Object.keys(chapterData).sort((a, b) => parseInt(a) - parseInt(b));
+        for (const verseNum of verseNumbers) {
+          const verseEl = versesContainer.createDiv({ cls: "verse-item" });
+          verseEl.style.marginBottom = "10px";
+          verseEl.style.padding = "5px";
+          verseEl.style.userSelect = "text";
+          verseEl.style.cursor = "text";
+          if (verseNum === verse) {
+            verseEl.style.backgroundColor = "var(--background-modifier-border)";
+            verseEl.style.borderLeft = "3px solid var(--interactive-accent)";
+            verseEl.style.paddingLeft = "10px";
+            setTimeout(() => {
+              verseEl.scrollIntoView({ behavior: "smooth", block: "center" });
+            }, 500);
+          }
+          const verseNumEl = verseEl.createEl("strong", { text: `${verseNum}. ` });
+          verseNumEl.style.marginRight = "5px";
+          verseEl.createSpan({ text: chapterData[verseNum] });
+        }
+      } catch (error) {
+        console.error("Error loading scripture context:", error);
+        this.contentContainer.createEl("p", { text: `Error loading context: ${error.message}` });
+      }
+    } finally {
+      this.isUpdating = false;
+    }
   }
   async updateContext() {
     if (!this.contentContainer || this.isUpdating)
@@ -2806,6 +3005,24 @@ var SqlitePlugin = class extends import_obsidian.Plugin {
         if (selectedText) {
           menu.addItem(
             (item) => item.setTitle(`Link to reference`).setIcon("link").onClick(async () => this.linkifySelectedText(editor))
+          );
+        }
+      })
+    );
+    this.registerEvent(
+      this.app.workspace.on("file-menu", (menu, file) => {
+        const filename = file.basename;
+        const match = filename.match(/^(.+?)\s+(\d+)\.(\d+)$/);
+        if (match) {
+          menu.addItem(
+            (item) => item.setTitle("Open Context").setIcon("book-open").onClick(async () => {
+              await this.activateView();
+              const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_SCRIPTURE_CONTEXT);
+              if (leaves.length > 0) {
+                const view = leaves[0].view;
+                await view.loadContextForFile(file);
+              }
+            })
           );
         }
       })
@@ -3165,7 +3382,7 @@ ${content}`).open();
       new import_obsidian.Notice(`Verse not found: ${filename}`);
       return;
     }
-    this.app.workspace.getLeaf().openFile(targetFile);
+    this.app.workspace.getLeaf("tab").openFile(targetFile);
   }
   async searchScriptures(searchTerm, dataFiles) {
     const results = [];
@@ -3507,7 +3724,7 @@ var ScriptureSearchModal = class extends import_obsidian.Modal {
           }
         }
         if (targetFile) {
-          this.app.workspace.getLeaf().openFile(targetFile);
+          this.app.workspace.getLeaf("tab").openFile(targetFile);
           this.close();
         } else {
           new import_obsidian.Notice(`Verse file not found: ${filename}`);
