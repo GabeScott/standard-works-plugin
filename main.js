@@ -2967,6 +2967,7 @@ var SqlitePlugin = class extends import_obsidian.Plugin {
   async onload() {
     await this.loadSettings();
     await this.loadSqlJs();
+    await this.ensureDataDirectory();
     await this.loadDatabase();
     console.log("Loading LDSS Plugin");
     this.registerView(
@@ -3234,6 +3235,93 @@ ${content}`).open();
     this.SQL = await (0, import_sql.default)({
       locateFile: (file) => `https://sql.js.org/dist/sql-wasm.wasm`
     });
+  }
+  async ensureDataDirectory() {
+    console.log("Ensuring data directory and files exist...");
+    const adapter = this.app.vault.adapter;
+    const basePath = this.manifest.dir;
+    const dataPath = `${basePath}/data`;
+    console.log(`Plugin directory: ${basePath}`);
+    console.log(`Data directory path: ${dataPath}`);
+    try {
+      const pluginContents = await adapter.list(basePath);
+      console.log("Plugin directory contents:", pluginContents);
+    } catch (err) {
+      console.error("Failed to list plugin directory:", err);
+    }
+    const files = [
+      "bom.json",
+      "commentary.db",
+      "dac.json",
+      "nt.json",
+      "ot.json",
+      "pogp.json"
+    ];
+    let dataDirExists = false;
+    try {
+      const statResult = await adapter.stat(dataPath);
+      console.log("Data directory stat result:", statResult);
+      dataDirExists = statResult !== null && statResult.type === "folder";
+      console.log(`Data directory exists: ${dataDirExists}`);
+    } catch (err) {
+      console.log("Data directory not found (stat failed):", err);
+      dataDirExists = false;
+    }
+    if (!dataDirExists) {
+      console.log("Creating data directory...");
+      try {
+        await adapter.mkdir(dataPath);
+        console.log("Data directory created successfully");
+      } catch (mkdirErr) {
+        console.error("Failed to create data directory:", mkdirErr);
+      }
+    }
+    const missingFiles = [];
+    for (const file of files) {
+      const filePath = `${dataPath}/${file}`;
+      try {
+        const fileStatResult = await adapter.stat(filePath);
+        if (fileStatResult === null) {
+          console.log(`File ${file} does not exist (stat returned null)`);
+          missingFiles.push(file);
+        }
+      } catch (err) {
+        console.log(`File ${file} does not exist (stat threw error):`, err);
+        missingFiles.push(file);
+      }
+    }
+    console.log(`Total missing files: ${missingFiles.length}`, missingFiles);
+    if (missingFiles.length > 0) {
+      console.log(`Missing ${missingFiles.length} data files, downloading...`);
+      new import_obsidian.Notice(`Downloading ${missingFiles.length} scripture data files...`);
+      const githubRawUrl = "https://raw.githubusercontent.com/GabeScott/standard-works-plugin/main/data";
+      let downloadedCount = 0;
+      for (const file of missingFiles) {
+        try {
+          const url = `${githubRawUrl}/${file}`;
+          console.log(`Downloading ${file} from ${url}`);
+          const response = await fetch(url);
+          if (!response.ok) {
+            console.error(`Failed to download ${file}: ${response.statusText}`);
+            new import_obsidian.Notice(`Failed to download ${file}`);
+            continue;
+          }
+          const arrayBuffer = await response.arrayBuffer();
+          const filePath = `${dataPath}/${file}`;
+          await adapter.writeBinary(filePath, arrayBuffer);
+          console.log(`Downloaded ${file}`);
+          downloadedCount++;
+        } catch (downloadErr) {
+          console.error(`Error downloading ${file}:`, downloadErr);
+          new import_obsidian.Notice(`Error downloading ${file}`);
+        }
+      }
+      if (downloadedCount === missingFiles.length) {
+        new import_obsidian.Notice("All scripture data files downloaded successfully!");
+      } else {
+        new import_obsidian.Notice(`Downloaded ${downloadedCount} of ${missingFiles.length} files. Check console for errors.`);
+      }
+    }
   }
   async loadDatabase() {
     if (!this.SQL) {
