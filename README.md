@@ -17,8 +17,23 @@ Designed to work with my [standard-works-vault](https://github.com/GabeScott/sta
 - 🧭 **Sort backlinks in scripture order**  
   Automatically organize verse backlinks in canonical order (e.g. Genesis → Exodus → Leviticus), not just by filename.
 
-- 📖 **View context for the verse you're currently reading**
-  See the whole chapter displayed conveniently in the side panel, updated when you change notes.
+- 📖 **Scripture Context Viewer**  
+  See the whole chapter displayed in a side panel, updated automatically as you navigate notes.
+  - **Click any verse** to open its note file
+  - **Previous / Next chapter navigation** that crosses book boundaries seamlessly
+  - **Right-click context menu** to copy verse text, reference, or both, or open the verse note
+  - **Hover highlighting** for easy verse identification
+  - **Go-to-verse search bar** — type a reference like `John 3:16` or `John 3` to jump directly
+
+- 🔎 **Go to Verse (Fuzzy Suggest)**  
+  A SuggestModal-based command with fuzzy matching across all 1,584 chapters. Type a book/chapter and drill into individual verses with a colon.
+
+- 🔍 **Full-Text Scripture Search**  
+  Search across all five standard works with selectable filters (OT, NT, Book of Mormon, D&C, Pearl of Great Price).
+  - **Regex / Wildcard mode** — toggle to use patterns like `faith*`, `\brepent\w+`, or any valid regex
+  - **Keyboard navigation** — Arrow keys to browse results, Enter to open
+  - Paginated results with highlighted matches
+  - Search state persists across modal opens
 
 ---
 
@@ -41,6 +56,9 @@ Say you're studying **Alma 37:6**. The plugin can:
 - Display commentary or insights for that verse from your database
 - Show backlinks like `[[Come, Follow Me Notes]] → Alma 37:6` in scripture order
 - View the whole chapter on the side to easily read the context for the verse
+- Click any verse in the context viewer to open its note
+- Navigate to the previous or next chapter with one click
+- Search the full text of all scriptures for any word or pattern
 
 ---
 

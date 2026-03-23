@@ -1,4 +1,4 @@
-import { App, Modal, Notice, Plugin, PluginSettingTab, Setting, Editor, MarkdownView, Menu, TFile, ItemView, WorkspaceLeaf} from "obsidian";
+import { App, Modal, Notice, Plugin, PluginSettingTab, Setting, Editor, MarkdownView, Menu, TFile, ItemView, WorkspaceLeaf, SuggestModal} from "obsidian";
 import initSqlJs, { Database, SqlJsStatic } from "sql.js";
 
 interface ScriptureData {
@@ -10,109 +10,69 @@ interface ScriptureData {
 	};
 }
 
-interface SqlitePluginSettings {
+interface StandardWorksPluginSettings {
 	orderBacklinks: boolean;
 }
 
-const DEFAULT_SETTINGS: SqlitePluginSettings = {
+const DEFAULT_SETTINGS: StandardWorksPluginSettings = {
 	orderBacklinks: true
 };
 
-const abbreviations = {
-	"Gen.":"Genesis",
-	"Ex.":"Exodus",
-	"Lev.":"Leviticus",
-	"Num.":"Numbers",
-	"Deut.":"Deuteronomy",
-	"Josh.":"Joshua",
-	"Judg.":"Judges",
-	"Ruth":"Ruth",
-	"1 Sam.":"1 Samuel",
-	"2 Sam.":"2 Samuel",
-	"1 Kgs.":"1 Kings",
-	"2 Kgs.":"2 Kings",
-	"1 Chr.":"1 Chronicles",
-	"2 Chr.":"2 Chronicles",
-	"Ezra":"Ezra",
-	"Neh.":"Nehemiah",
-	"Esth.":"Esther",
-	"Job":"Job",
-	"Ps.":"Psalms",
-	"Prov.":"Proverbs",
-	"Eccl.":"Ecclesiastes",
-	"Song":"Song of Solomon",
-	"Isa.":"Isaiah",
-	"Jer.":"Jeremiah",
-	"Lam.":"Lamentations",
-	"Ezek.":"Ezekiel",
-	"Dan.":"Daniel",
-	"Hosea":"Hosea",
-	"Joel":"Joel",
-	"Amos":"Amos",
-	"Obad.":"Obadiah",
-	"Jonah":"Jonah",
-	"Micah":"Micah",
-	"Nahum":"Nahum",
-	"Hab.":"Habakkuk",
-	"Zeph.":"Zephaniah",
-	"Hag.":"Haggai",
-	"Zech.":"Zechariah",
-	"Mal.":"Malachi",
-	"Matt.":"Matthew",
-	"Mark":"Mark",
-	"Luke":"Luke",
-	"John":"John",
-	"Acts":"Acts",
-	"Rom.":"Romans",
-	"1 Cor.":"1 Corinthians",
-	"2 Cor.":"2 Corinthians",
-	"Gal.":"Galatians",
-	"Eph.":"Ephesians",
-	"Philip.":"Philippians",
-	"Col.":"Colossians",
-	"1 Thes.":"1 Thessalonians",
-	"2 Thes.":"2 Thessalonians",
-	"1 Tim.":"1 Timothy",
-	"2 Tim.":"2 Timothy",
-	"Titus":"Titus",
-	"Philem.":"Philemon",
-	"Heb.":"Hebrews",
-	"James":"James",
-	"1 Pet.":"1 Peter",
-	"2 Pet.":"2 Peter",
-	"1 Jn.":"1 John",
-	"2 Jn.":"2 John",
-	"3 Jn.":"3 John",
-	"Jude":"Jude",
-	"Rev.":"Revelation",
-	"1 Ne.":"1 Nephi",
-	"2 Ne.":"2 Nephi",
-	"Jacob":"Jacob",
-	"Enos":"Enos",
-	"Jarom":"Jarom",
-	"Omni":"Omni",
-	"W of M":"Words of Mormon",
-	"Mosiah":"Mosiah",
-	"Alma":"Alma",
-	"Hel.":"Helaman",
-	"3 Ne.":"3 Nephi",
-	"4 Ne.":"4 Nephi",
-	"Morm.":"Mormon",
-	"Ether":"Ether",
-	"Moro.":"Moroni",
-	"D&C":"D&C",
-	"OD":"Official Declaration",
-	"Moses":"Moses",
-	"Abr.":"Abraham",
-	"JS—M":"Joseph Smith Matthew",
-	"JS—H":"Joseph Smith History",
-	"A of F":"Articles of Faith"
+// Single source of truth: groups books by data file, preserving canonical scripture order
+const BOOKS_BY_FILE: Record<string, Record<string, string>> = {
+	"ot.json": {
+		"Gen.": "Genesis", "Ex.": "Exodus", "Lev.": "Leviticus", "Num.": "Numbers",
+		"Deut.": "Deuteronomy", "Josh.": "Joshua", "Judg.": "Judges", "Ruth": "Ruth",
+		"1 Sam.": "1 Samuel", "2 Sam.": "2 Samuel", "1 Kgs.": "1 Kings", "2 Kgs.": "2 Kings",
+		"1 Chr.": "1 Chronicles", "2 Chr.": "2 Chronicles", "Ezra": "Ezra", "Neh.": "Nehemiah",
+		"Esth.": "Esther", "Job": "Job", "Ps.": "Psalms", "Prov.": "Proverbs",
+		"Eccl.": "Ecclesiastes", "Song": "Song of Solomon", "Isa.": "Isaiah", "Jer.": "Jeremiah",
+		"Lam.": "Lamentations", "Ezek.": "Ezekiel", "Dan.": "Daniel", "Hosea": "Hosea",
+		"Joel": "Joel", "Amos": "Amos", "Obad.": "Obadiah", "Jonah": "Jonah",
+		"Micah": "Micah", "Nahum": "Nahum", "Hab.": "Habakkuk", "Zeph.": "Zephaniah",
+		"Hag.": "Haggai", "Zech.": "Zechariah", "Mal.": "Malachi",
+	},
+	"nt.json": {
+		"Matt.": "Matthew", "Mark": "Mark", "Luke": "Luke", "John": "John", "Acts": "Acts",
+		"Rom.": "Romans", "1 Cor.": "1 Corinthians", "2 Cor.": "2 Corinthians",
+		"Gal.": "Galatians", "Eph.": "Ephesians", "Philip.": "Philippians", "Col.": "Colossians",
+		"1 Thes.": "1 Thessalonians", "2 Thes.": "2 Thessalonians",
+		"1 Tim.": "1 Timothy", "2 Tim.": "2 Timothy", "Titus": "Titus", "Philem.": "Philemon",
+		"Heb.": "Hebrews", "James": "James", "1 Pet.": "1 Peter", "2 Pet.": "2 Peter",
+		"1 Jn.": "1 John", "2 Jn.": "2 John", "3 Jn.": "3 John", "Jude": "Jude", "Rev.": "Revelation",
+	},
+	"bom.json": {
+		"1 Ne.": "1 Nephi", "2 Ne.": "2 Nephi", "Jacob": "Jacob", "Enos": "Enos",
+		"Jarom": "Jarom", "Omni": "Omni", "W of M": "Words of Mormon", "Mosiah": "Mosiah",
+		"Alma": "Alma", "Hel.": "Helaman", "3 Ne.": "3 Nephi", "4 Ne.": "4 Nephi",
+		"Morm.": "Mormon", "Ether": "Ether", "Moro.": "Moroni",
+	},
+	"dac.json": {
+		"D&C": "D&C", "OD": "Official Declaration",
+	},
+	"pogp.json": {
+		"Moses": "Moses", "Abr.": "Abraham", "JS—M": "Joseph Smith Matthew",
+		"JS—H": "Joseph Smith History", "A of F": "Articles of Faith",
+	}
+};
+
+// Derived lookup maps (preserves canonical scripture order for backlink sorting)
+const abbreviations: Record<string, string> = {};
+const BOOK_TO_FILE: Record<string, string> = {};
+// Flat ordered list of all book full-names across all standard works
+const ALL_BOOKS: string[] = [];
+for (const [dataFile, books] of Object.entries(BOOKS_BY_FILE)) {
+	for (const [abbr, fullName] of Object.entries(books)) {
+		abbreviations[abbr] = fullName;
+		BOOK_TO_FILE[fullName] = dataFile;
+		ALL_BOOKS.push(fullName);
+	}
 }
 
 const VIEW_TYPE_SCRIPTURE_CONTEXT = "scripture-context-view";
 
 class ScriptureContextView extends ItemView {
-	private plugin: SqlitePlugin;
+	private plugin: StandardWorksPlugin;
 	private contentEl: HTMLElement;
 	private contentContainer: HTMLElement;
 	private isUpdating: boolean = false;
@@ -122,8 +82,13 @@ class ScriptureContextView extends ItemView {
 	private currentVerse: string | null = null;
 	private updateOnFileChange: boolean = true;
 	private chapterHeaderEl: HTMLElement;
+	private updateDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+	private prevChapterBtn: HTMLButtonElement;
+	private nextChapterBtn: HTMLButtonElement;
+	private activeContextMenu: HTMLElement | null = null;
+	private boundDismissMenu: ((e: Event) => void) | null = null;
 
-	constructor(leaf: WorkspaceLeaf, plugin: SqlitePlugin) {
+	constructor(leaf: WorkspaceLeaf, plugin: StandardWorksPlugin) {
 		super(leaf);
 		this.plugin = plugin;
 	}
@@ -143,46 +108,22 @@ class ScriptureContextView extends ItemView {
 	async onOpen(): Promise<void> {
 		const container = this.containerEl.children[1];
 		container.empty();
-		this.contentEl = container.createDiv();
-		this.contentEl.style.height = "100%";
-		this.contentEl.style.display = "flex";
-		this.contentEl.style.flexDirection = "column";
+		this.contentEl = container.createDiv({ cls: "scripture-context-wrapper" });
 		
 		// Create header with toggle
 		const headerEl = this.contentEl.createDiv({ cls: "scripture-context-header" });
-		headerEl.style.display = "flex";
-		headerEl.style.justifyContent = "space-between";
-		headerEl.style.alignItems = "center";
-		headerEl.style.padding = "10px";
-		headerEl.style.paddingRight = "15px";
-		headerEl.style.borderBottom = "1px solid var(--background-modifier-border)";
-		headerEl.style.flexShrink = "0";
 		
-		const titleEl = headerEl.createEl("h4", { text: "Scripture Context" });
-		titleEl.style.margin = "0";
+		headerEl.createEl("h4", { text: "Scripture Context" });
 		
-		const toggleContainer = headerEl.createDiv();
-		toggleContainer.style.display = "flex";
-		toggleContainer.style.alignItems = "center";
-		toggleContainer.style.gap = "8px";
+		const toggleContainer = headerEl.createDiv({ cls: "scripture-context-toggle" });
 		
 		// Create search bar container
 		const searchContainer = this.contentEl.createDiv({ cls: "scripture-search-container" });
-		searchContainer.style.padding = "10px";
-		searchContainer.style.borderBottom = "1px solid var(--background-modifier-border)";
-		searchContainer.style.flexShrink = "0";
 		
 		const searchInput = searchContainer.createEl("input", {
 			type: "text",
 			attr: { placeholder: "Go to verse (e.g., John 3:16 or John 3)" }
 		});
-		searchInput.style.width = "100%";
-		searchInput.style.padding = "8px 12px";
-		searchInput.style.boxSizing = "border-box";
-		searchInput.style.border = "1px solid var(--background-modifier-border)";
-		searchInput.style.borderRadius = "4px";
-		searchInput.style.backgroundColor = "var(--background-primary)";
-		searchInput.style.color = "var(--text-normal)";
 		
 		searchInput.addEventListener("keydown", (e) => {
 			if (e.key === "Enter") {
@@ -194,36 +135,30 @@ class ScriptureContextView extends ItemView {
 			}
 		});
 		
-		const toggleLabel = toggleContainer.createEl("span", { text: "Update on file change" });
-		toggleLabel.style.fontSize = "0.9em";
-		toggleLabel.style.color = "var(--text-muted)";
+		toggleContainer.createEl("span", { text: "Update on file change" });
 		
 		const toggleInput = toggleContainer.createEl("input", {
 			attr: { type: "checkbox", checked: this.updateOnFileChange }
 		});
-		toggleInput.style.cursor = "pointer";
 		
 		toggleInput.addEventListener("change", () => {
 			this.updateOnFileChange = toggleInput.checked;
 		});
 		
-		// Create floating chapter header
-		this.chapterHeaderEl = this.contentEl.createDiv({ cls: "scripture-chapter-header" });
-		this.chapterHeaderEl.style.padding = "6px 10px";
-		this.chapterHeaderEl.style.borderBottom = "1px solid var(--background-modifier-border)";
-		this.chapterHeaderEl.style.flexShrink = "0";
-		this.chapterHeaderEl.style.fontWeight = "bold";
-		this.chapterHeaderEl.style.fontSize = "0.95em";
-		this.chapterHeaderEl.style.color = "var(--text-muted)";
-		this.chapterHeaderEl.style.userSelect = "text";
-		this.chapterHeaderEl.style.cursor = "text";
-		this.chapterHeaderEl.setText("—");
+		// Create chapter navigation bar
+		const navContainer = this.contentEl.createDiv({ cls: "chapter-nav-container" });
+		this.prevChapterBtn = navContainer.createEl("button", { text: "← Prev" });
+		this.chapterHeaderEl = navContainer.createEl("span", { cls: "chapter-nav-label", text: "—" });
+		this.nextChapterBtn = navContainer.createEl("button", { text: "Next →" });
+		
+		this.prevChapterBtn.disabled = true;
+		this.nextChapterBtn.disabled = true;
+		
+		this.prevChapterBtn.addEventListener("click", () => this.navigateChapter(-1));
+		this.nextChapterBtn.addEventListener("click", () => this.navigateChapter(1));
 
 		// Create content container that will be updated
 		this.contentContainer = this.contentEl.createDiv({ cls: "scripture-context-content" });
-		this.contentContainer.style.flex = "1";
-		this.contentContainer.style.overflowY = "auto";
-		this.contentContainer.style.padding = "10px";
 		
 		// Register event to update when active file changes
 		this.registerEvent(
@@ -232,8 +167,8 @@ class ScriptureContextView extends ItemView {
 			})
 		);
 		
-		// Initial update
-		this.updateContext();
+		// Defer initial update to ensure construction is fully complete
+		setTimeout(() => this.updateContext(), 0);
 	}
 
 	async loadContextByReference(reference: string): Promise<void> {
@@ -264,13 +199,8 @@ class ScriptureContextView extends ItemView {
 			book = parts.slice(0, -1).join(" ");
 		}
 		
-		// Expand abbreviations
-		for (const [key, value] of Object.entries(abbreviations)) {
-			if (book.includes(key)) {
-				book = book.replace(key, value);
-				break;
-			}
-		}
+		// Expand abbreviations (exact match)
+		book = abbreviations[book] || book;
 		
 		this.isUpdating = true;
 		this.currentBook = book;
@@ -279,76 +209,7 @@ class ScriptureContextView extends ItemView {
 		this.currentFile = null; // Not loading from a file
 		
 		try {
-			this.contentContainer.empty();
-			
-			const dataFile = this.getDataFileForBook(book);
-			if (!dataFile) {
-				this.contentContainer.createEl("p", { text: `Unknown book: ${book}` });
-				new Notice(`Unknown book: ${book}`);
-				return;
-			}
-			
-			try {
-				const dataPath = `data/${dataFile}`;
-				const adapter = this.app.vault.adapter;
-				const basePath = (this.plugin.manifest as any).dir;
-				const fullPath = `${basePath}/${dataPath}`;
-				
-				const jsonContent = await adapter.read(fullPath);
-				const scriptureData: ScriptureData = JSON.parse(jsonContent);
-				
-				if (!scriptureData[book] || !scriptureData[book][chapter]) {
-					this.contentContainer.createEl("p", { text: `Chapter ${chapter} not found in ${book}` });
-					new Notice(`Chapter ${chapter} not found in ${book}`);
-					return;
-				}
-				
-				const chapterData = scriptureData[book][chapter] as { [verse: string]: string };
-				
-				this.chapterHeaderEl.setText(`${book} ${chapter}`);
-
-				const heading = scriptureData[book].heading;
-				if (heading && typeof heading === "string") {
-					const headingEl = this.contentContainer.createDiv({ cls: "chapter-heading" });
-					const headingText = headingEl.createEl("em", { text: heading });
-					headingEl.style.marginBottom = "10px";
-					headingEl.style.fontSize = "0.9em";
-					headingEl.style.color = "var(--text-muted)";
-					headingEl.style.userSelect = "text";
-					headingEl.style.cursor = "text";
-				}
-				
-				const versesContainer = this.contentContainer.createDiv({ cls: "chapter-verses" });
-				versesContainer.style.marginTop = "10px";
-				
-				const verseNumbers = Object.keys(chapterData).sort((a, b) => parseInt(a) - parseInt(b));
-				for (const verseNum of verseNumbers) {
-					const verseEl = versesContainer.createDiv({ cls: "verse-item" });
-					verseEl.style.marginBottom = "10px";
-					verseEl.style.padding = "5px";
-					verseEl.style.userSelect = "text";
-					verseEl.style.cursor = "text";
-					
-					if (verseNum === verse) {
-						verseEl.style.backgroundColor = "var(--background-modifier-border)";
-						verseEl.style.borderLeft = "3px solid var(--interactive-accent)";
-						verseEl.style.paddingLeft = "10px";
-						
-						setTimeout(() => {
-							verseEl.scrollIntoView({ behavior: "smooth", block: "center" });
-						}, 500);
-					}
-					
-					const verseNumEl = verseEl.createEl("strong", { text: `${verseNum}. ` });
-					verseNumEl.style.marginRight = "5px";
-					verseEl.createSpan({ text: chapterData[verseNum] });
-				}
-				
-			} catch (error) {
-				console.error("Error loading scripture context:", error);
-				this.contentContainer.createEl("p", { text: `Error loading context: ${error.message}` });
-				new Notice(`Error loading scripture: ${error.message}`);
-			}
+			await this.renderChapter(book, chapter, verse, true);
 		} finally {
 			this.isUpdating = false;
 		}
@@ -374,73 +235,7 @@ class ScriptureContextView extends ItemView {
 		this.currentFile = file.path;
 		
 		try {
-			this.contentContainer.empty();
-			
-			const dataFile = this.getDataFileForBook(bookName);
-			if (!dataFile) {
-				this.contentContainer.createEl("p", { text: `Unknown book: ${bookName}` });
-				return;
-			}
-			
-			try {
-				const dataPath = `data/${dataFile}`;
-				const adapter = this.app.vault.adapter;
-				const basePath = (this.plugin.manifest as any).dir;
-				const fullPath = `${basePath}/${dataPath}`;
-				
-				const jsonContent = await adapter.read(fullPath);
-				const scriptureData: ScriptureData = JSON.parse(jsonContent);
-				
-				if (!scriptureData[bookName] || !scriptureData[bookName][chapter]) {
-					this.contentContainer.createEl("p", { text: `Chapter ${chapter} not found in ${bookName}` });
-					return;
-				}
-				
-				const chapterData = scriptureData[bookName][chapter] as { [verse: string]: string };
-				
-				this.chapterHeaderEl.setText(`${bookName} ${chapter}`);
-
-				const heading = scriptureData[bookName].heading;
-				if (heading && typeof heading === "string") {
-					const headingEl = this.contentContainer.createDiv({ cls: "chapter-heading" });
-					const headingText = headingEl.createEl("em", { text: heading });
-					headingEl.style.marginBottom = "10px";
-					headingEl.style.fontSize = "0.9em";
-					headingEl.style.color = "var(--text-muted)";
-					headingEl.style.userSelect = "text";
-					headingEl.style.cursor = "text";
-				}
-				
-				const versesContainer = this.contentContainer.createDiv({ cls: "chapter-verses" });
-				versesContainer.style.marginTop = "10px";
-				
-				const verseNumbers = Object.keys(chapterData).sort((a, b) => parseInt(a) - parseInt(b));
-				for (const verseNum of verseNumbers) {
-					const verseEl = versesContainer.createDiv({ cls: "verse-item" });
-					verseEl.style.marginBottom = "10px";
-					verseEl.style.padding = "5px";
-					verseEl.style.userSelect = "text";
-					verseEl.style.cursor = "text";
-					
-					if (verseNum === verse) {
-						verseEl.style.backgroundColor = "var(--background-modifier-border)";
-						verseEl.style.borderLeft = "3px solid var(--interactive-accent)";
-						verseEl.style.paddingLeft = "10px";
-						
-						setTimeout(() => {
-							verseEl.scrollIntoView({ behavior: "smooth", block: "center" });
-						}, 500);
-					}
-					
-					const verseNumEl = verseEl.createEl("strong", { text: `${verseNum}. ` });
-					verseNumEl.style.marginRight = "5px";
-					verseEl.createSpan({ text: chapterData[verseNum] });
-				}
-				
-			} catch (error) {
-				console.error("Error loading scripture context:", error);
-				this.contentContainer.createEl("p", { text: `Error loading context: ${error.message}` });
-			}
+			await this.renderChapter(bookName, chapter, verse, false);
 		} finally {
 			this.isUpdating = false;
 		}
@@ -493,184 +288,92 @@ class ScriptureContextView extends ItemView {
 		this.currentVerse = verse;
 		
 		try {
-			this.contentContainer.empty();
-			
-			// Determine which JSON file to load based on the book
-			const dataFile = this.getDataFileForBook(bookName);
-			if (!dataFile) {
-				this.contentContainer.createEl("p", { text: `Unknown book: ${bookName}` });
-				return;
-			}
-			
-			try {
-				// Load the JSON data
-				const dataPath = `data/${dataFile}`;
-				const adapter = this.app.vault.adapter;
-				const basePath = (this.plugin.manifest as any).dir;
-				const fullPath = `${basePath}/${dataPath}`;
-				
-				const jsonContent = await adapter.read(fullPath);
-				const scriptureData: ScriptureData = JSON.parse(jsonContent);
-				
-				// Get the chapter data
-				if (!scriptureData[bookName] || !scriptureData[bookName][chapter]) {
-					this.contentContainer.createEl("p", { text: `Chapter ${chapter} not found in ${bookName}` });
-					return;
-				}
-				
-				const chapterData = scriptureData[bookName][chapter] as { [verse: string]: string };
-				
-				this.chapterHeaderEl.setText(`${bookName} ${chapter}`);
-
-				// Display chapter heading if available
-				const heading = scriptureData[bookName].heading;
-				if (heading && typeof heading === "string") {
-					const headingEl = this.contentContainer.createDiv({ cls: "chapter-heading" });
-					const headingText = headingEl.createEl("em", { text: heading });
-					headingEl.style.marginBottom = "10px";
-					headingEl.style.fontSize = "0.9em";
-					headingEl.style.color = "var(--text-muted)";
-					headingEl.style.userSelect = "text";
-					headingEl.style.cursor = "text";
-				}
-				
-				// Display all verses in the chapter
-				const versesContainer = this.contentContainer.createDiv({ cls: "chapter-verses" });
-				versesContainer.style.marginTop = "10px";
-				
-				const verseNumbers = Object.keys(chapterData).sort((a, b) => parseInt(a) - parseInt(b));
-				for (const verseNum of verseNumbers) {
-					const verseEl = versesContainer.createDiv({ cls: "verse-item" });
-					verseEl.style.marginBottom = "10px";
-					verseEl.style.padding = "5px";
-					verseEl.style.userSelect = "text";
-					verseEl.style.cursor = "text";
-					
-					// Highlight the current verse
-					if (verseNum === verse) {
-						verseEl.style.backgroundColor = "var(--background-modifier-border)";
-						verseEl.style.borderLeft = "3px solid var(--interactive-accent)";
-						verseEl.style.paddingLeft = "10px";
-						
-						// Scroll to the current verse after a short delay to ensure DOM is ready
-						setTimeout(() => {
-							verseEl.scrollIntoView({ behavior: "smooth", block: "center" });
-						}, 500);
-					}
-					
-					const verseNumEl = verseEl.createEl("strong", { text: `${verseNum}. ` });
-					verseNumEl.style.marginRight = "5px";
-					verseEl.createSpan({ text: chapterData[verseNum] });
-				}
-				
-			} catch (error) {
-				console.error("Error loading scripture context:", error);
-				this.contentContainer.createEl("p", { text: `Error loading context: ${error.message}` });
-			}
+			await this.renderChapter(bookName, chapter, verse, false);
 		} finally {
 			this.isUpdating = false;
 		}
 	}
 
+	/**
+	 * Shared method to load and render a chapter's verses into the content container.
+	 * @param bookName - The full book name (e.g., "1 Nephi")
+	 * @param chapter - The chapter number as a string
+	 * @param verse - The verse to highlight
+	 * @param showNotices - Whether to show Notice popups on errors (used for manual navigation)
+	 */
+	private async renderChapter(bookName: string, chapter: string, verse: string, showNotices: boolean): Promise<void> {
+		this.contentContainer.empty();
+
+		const dataFile = this.getDataFileForBook(bookName);
+		if (!dataFile) {
+			this.contentContainer.createEl("p", { text: `Unknown book: ${bookName}` });
+			if (showNotices) new Notice(`Unknown book: ${bookName}`);
+			return;
+		}
+
+		try {
+			const scriptureData = await this.plugin.getScriptureData(dataFile);
+
+			if (!scriptureData[bookName] || !scriptureData[bookName][chapter]) {
+				this.contentContainer.createEl("p", { text: `Chapter ${chapter} not found in ${bookName}` });
+				if (showNotices) new Notice(`Chapter ${chapter} not found in ${bookName}`);
+				return;
+			}
+
+			const chapterData = scriptureData[bookName][chapter] as { [key: string]: string };
+
+			this.chapterHeaderEl.setText(`${bookName} ${chapter}`);
+			this.updateNavButtons(scriptureData, bookName, chapter);
+
+			// Book-level heading (only on chapter 1)
+			const bookHeading = scriptureData[bookName].heading;
+			if (bookHeading && typeof bookHeading === "string" && chapter === "1") {
+				const headingEl = this.contentContainer.createDiv({ cls: "chapter-heading" });
+				headingEl.createEl("em", { text: bookHeading });
+			}
+
+			// Chapter-level heading (e.g., Mosiah 9, Alma 5, etc.)
+			const chapterHeading = chapterData.heading;
+			if (chapterHeading && typeof chapterHeading === "string") {
+				const headingEl = this.contentContainer.createDiv({ cls: "chapter-heading" });
+				headingEl.createEl("em", { text: chapterHeading });
+			}
+
+			const versesContainer = this.contentContainer.createDiv({ cls: "chapter-verses" });
+
+			const verseNumbers = Object.keys(chapterData).filter(k => k !== "heading").sort((a, b) => parseInt(a) - parseInt(b));
+			for (const verseNum of verseNumbers) {
+				const verseEl = versesContainer.createDiv({ cls: verseNum === verse ? "verse-item active" : "verse-item" });
+
+				if (verseNum === verse) {
+					setTimeout(() => {
+						verseEl.scrollIntoView({ behavior: "smooth", block: "center" });
+					}, 500);
+				}
+
+				verseEl.createEl("strong", { text: `${verseNum}. ` });
+				verseEl.createSpan({ text: chapterData[verseNum] });
+
+				// Click verse to open its note
+				verseEl.addEventListener("click", () => {
+					this.openVerseNote(bookName, chapter, verseNum);
+				});
+
+				// Right-click for context menu
+				verseEl.addEventListener("contextmenu", (e) => {
+					e.preventDefault();
+					this.showVerseContextMenu(e, bookName, chapter, verseNum, chapterData[verseNum]);
+				});
+			}
+		} catch (error) {
+			console.error("Error loading scripture context:", error);
+			this.contentContainer.createEl("p", { text: `Error loading context: ${error.message}` });
+			if (showNotices) new Notice(`Error loading scripture: ${error.message}`);
+		}
+	}
+
 	private getDataFileForBook(bookName: string): string | null {
-		// Map book names to their JSON files
-		const bookToFile: { [key: string]: string } = {
-			// Book of Mormon
-			"1 Nephi": "bom.json",
-			"2 Nephi": "bom.json",
-			"Jacob": "bom.json",
-			"Enos": "bom.json",
-			"Jarom": "bom.json",
-			"Omni": "bom.json",
-			"Words of Mormon": "bom.json",
-			"Mosiah": "bom.json",
-			"Alma": "bom.json",
-			"Helaman": "bom.json",
-			"3 Nephi": "bom.json",
-			"4 Nephi": "bom.json",
-			"Mormon": "bom.json",
-			"Ether": "bom.json",
-			"Moroni": "bom.json",
-			// Old Testament
-			"Genesis": "ot.json",
-			"Exodus": "ot.json",
-			"Leviticus": "ot.json",
-			"Numbers": "ot.json",
-			"Deuteronomy": "ot.json",
-			"Joshua": "ot.json",
-			"Judges": "ot.json",
-			"Ruth": "ot.json",
-			"1 Samuel": "ot.json",
-			"2 Samuel": "ot.json",
-			"1 Kings": "ot.json",
-			"2 Kings": "ot.json",
-			"1 Chronicles": "ot.json",
-			"2 Chronicles": "ot.json",
-			"Ezra": "ot.json",
-			"Nehemiah": "ot.json",
-			"Esther": "ot.json",
-			"Job": "ot.json",
-			"Psalms": "ot.json",
-			"Proverbs": "ot.json",
-			"Ecclesiastes": "ot.json",
-			"Song of Solomon": "ot.json",
-			"Isaiah": "ot.json",
-			"Jeremiah": "ot.json",
-			"Lamentations": "ot.json",
-			"Ezekiel": "ot.json",
-			"Daniel": "ot.json",
-			"Hosea": "ot.json",
-			"Joel": "ot.json",
-			"Amos": "ot.json",
-			"Obadiah": "ot.json",
-			"Jonah": "ot.json",
-			"Micah": "ot.json",
-			"Nahum": "ot.json",
-			"Habakkuk": "ot.json",
-			"Zephaniah": "ot.json",
-			"Haggai": "ot.json",
-			"Zechariah": "ot.json",
-			"Malachi": "ot.json",
-			// New Testament
-			"Matthew": "nt.json",
-			"Mark": "nt.json",
-			"Luke": "nt.json",
-			"John": "nt.json",
-			"Acts": "nt.json",
-			"Romans": "nt.json",
-			"1 Corinthians": "nt.json",
-			"2 Corinthians": "nt.json",
-			"Galatians": "nt.json",
-			"Ephesians": "nt.json",
-			"Philippians": "nt.json",
-			"Colossians": "nt.json",
-			"1 Thessalonians": "nt.json",
-			"2 Thessalonians": "nt.json",
-			"1 Timothy": "nt.json",
-			"2 Timothy": "nt.json",
-			"Titus": "nt.json",
-			"Philemon": "nt.json",
-			"Hebrews": "nt.json",
-			"James": "nt.json",
-			"1 Peter": "nt.json",
-			"2 Peter": "nt.json",
-			"1 John": "nt.json",
-			"2 John": "nt.json",
-			"3 John": "nt.json",
-			"Jude": "nt.json",
-			"Revelation": "nt.json",
-			// D&C
-			"D&C": "dac.json",
-			"Official Declaration": "dac.json",
-			// Pearl of Great Price
-			"Moses": "pogp.json",
-			"Abraham": "pogp.json",
-			"Joseph Smith Matthew": "pogp.json",
-			"Joseph Smith History": "pogp.json",
-			"Articles of Faith": "pogp.json"
-		};
-		
-		return bookToFile[bookName] || null;
+		return BOOK_TO_FILE[bookName] || null;
 	}
 
 	private updateHighlighting(newVerse: string): void {
@@ -689,32 +392,26 @@ class ScriptureContextView extends ItemView {
 			const verseNum = verseNumEl.textContent?.replace(".", "").trim();
 			
 			if (verseNum === newVerse) {
-				// Highlight this verse
-				(verseEl as HTMLElement).style.backgroundColor = "var(--background-modifier-border)";
-				(verseEl as HTMLElement).style.borderLeft = "3px solid var(--interactive-accent)";
-				(verseEl as HTMLElement).style.paddingLeft = "10px";
+				(verseEl as HTMLElement).classList.add("active");
 				targetVerse = verseEl as HTMLElement;
 			} else {
-				// Remove highlighting from other verses
-				(verseEl as HTMLElement).style.backgroundColor = "";
-				(verseEl as HTMLElement).style.borderLeft = "";
-				(verseEl as HTMLElement).style.paddingLeft = "5px";
+				(verseEl as HTMLElement).classList.remove("active");
 			}
 		});
 		
 		// Scroll to the target verse after updating all styles
 		if (targetVerse) {
-			// Calculate the scroll position manually to avoid interruption
+			// Scroll the actual scrollable container (contentContainer), not the inner versesContainer
+			const scrollContainer = this.contentContainer;
 			requestAnimationFrame(() => {
-				if (!targetVerse || !versesContainer) return;
+				if (!targetVerse || !scrollContainer) return;
 				
-				const containerRect = versesContainer.getBoundingClientRect();
+				const containerRect = scrollContainer.getBoundingClientRect();
 				const targetRect = targetVerse.getBoundingClientRect();
 				const relativeTop = targetRect.top - containerRect.top;
-				const scrollTarget = versesContainer.scrollTop + relativeTop - (containerRect.height / 2) + (targetRect.height / 2);
+				const scrollTarget = scrollContainer.scrollTop + relativeTop - (containerRect.height / 2) + (targetRect.height / 2);
 				
-				// Use smooth scroll on the container
-				versesContainer.scrollTo({
+				scrollContainer.scrollTo({
 					top: scrollTarget,
 					behavior: "smooth"
 				});
@@ -722,21 +419,162 @@ class ScriptureContextView extends ItemView {
 		}
 	}
 
+	private openVerseNote(bookName: string, chapter: string, verse: string): void {
+		const filename = `${bookName} ${chapter}.${verse}`;
+		const files = this.app.vault.getFiles();
+		const targetFile = files.find(f => f.basename === filename);
+		
+		if (targetFile) {
+			this.app.workspace.getLeaf('tab').openFile(targetFile);
+		} else {
+			new Notice(`Note not found: ${filename}`);
+		}
+	}
+
+	private showVerseContextMenu(e: MouseEvent, bookName: string, chapter: string, verse: string, text: string): void {
+		this.dismissContextMenu();
+		
+		const menu = document.createElement("div");
+		menu.addClass("verse-context-menu");
+		menu.style.left = `${e.clientX}px`;
+		menu.style.top = `${e.clientY}px`;
+		
+		const copyVerseItem = menu.createDiv({ cls: "verse-context-menu-item", text: "Copy verse text" });
+		copyVerseItem.addEventListener("click", () => {
+			navigator.clipboard.writeText(text);
+			new Notice("Verse text copied");
+			this.dismissContextMenu();
+		});
+		
+		const copyRefItem = menu.createDiv({ cls: "verse-context-menu-item", text: "Copy reference" });
+		copyRefItem.addEventListener("click", () => {
+			navigator.clipboard.writeText(`${bookName} ${chapter}:${verse}`);
+			new Notice("Reference copied");
+			this.dismissContextMenu();
+		});
+		
+		const copyBothItem = menu.createDiv({ cls: "verse-context-menu-item", text: "Copy reference + text" });
+		copyBothItem.addEventListener("click", () => {
+			navigator.clipboard.writeText(`${bookName} ${chapter}:${verse} — ${text}`);
+			new Notice("Reference and text copied");
+			this.dismissContextMenu();
+		});
+		
+		const openNoteItem = menu.createDiv({ cls: "verse-context-menu-item", text: "Open note" });
+		openNoteItem.addEventListener("click", () => {
+			this.openVerseNote(bookName, chapter, verse);
+			this.dismissContextMenu();
+		});
+		
+		document.body.appendChild(menu);
+		this.activeContextMenu = menu;
+		
+		// Dismiss on click outside or scroll
+		this.boundDismissMenu = () => this.dismissContextMenu();
+		setTimeout(() => {
+			document.addEventListener("click", this.boundDismissMenu!);
+			document.addEventListener("contextmenu", this.boundDismissMenu!);
+			this.contentContainer?.addEventListener("scroll", this.boundDismissMenu!);
+		}, 0);
+	}
+
+	private dismissContextMenu(): void {
+		if (this.activeContextMenu) {
+			this.activeContextMenu.remove();
+			this.activeContextMenu = null;
+		}
+		if (this.boundDismissMenu) {
+			document.removeEventListener("click", this.boundDismissMenu);
+			document.removeEventListener("contextmenu", this.boundDismissMenu);
+			this.contentContainer?.removeEventListener("scroll", this.boundDismissMenu);
+			this.boundDismissMenu = null;
+		}
+	}
+
+	private updateNavButtons(scriptureData: ScriptureData, bookName: string, chapter: string): void {
+		if (!scriptureData?.[bookName] || !this.prevChapterBtn || !this.nextChapterBtn) return;
+		const chapters = Object.keys(scriptureData[bookName])
+			.filter(k => k !== "heading")
+			.map(Number)
+			.sort((a, b) => a - b);
+		const chapterNum = parseInt(chapter);
+		const bookIdx = ALL_BOOKS.indexOf(bookName);
+		
+		// Disable prev only at the very first chapter of the very first book (Genesis 1)
+		this.prevChapterBtn.disabled = chapterNum <= chapters[0] && bookIdx <= 0;
+		// Disable next only at the very last chapter of the very last book (Articles of Faith)
+		this.nextChapterBtn.disabled = chapterNum >= chapters[chapters.length - 1] && bookIdx >= ALL_BOOKS.length - 1;
+	}
+
+	private async navigateChapter(direction: number): Promise<void> {
+		if (!this.currentBook || !this.currentChapter) return;
+		
+		const dataFile = this.getDataFileForBook(this.currentBook);
+		if (!dataFile) return;
+		
+		const scriptureData = await this.plugin.getScriptureData(dataFile);
+		const chapters = Object.keys(scriptureData[this.currentBook])
+			.filter(k => k !== "heading")
+			.map(Number)
+			.sort((a, b) => a - b);
+		
+		const currentIdx = chapters.indexOf(parseInt(this.currentChapter));
+		const newIdx = currentIdx + direction;
+		
+		if (newIdx >= 0 && newIdx < chapters.length) {
+			// Navigate within the same book
+			const newChapter = String(chapters[newIdx]);
+			this.currentChapter = newChapter;
+			this.currentVerse = "1";
+			this.currentFile = null;
+			await this.renderChapter(this.currentBook, newChapter, "1", false);
+		} else {
+			// Cross book boundary
+			const bookIdx = ALL_BOOKS.indexOf(this.currentBook);
+			const newBookIdx = bookIdx + direction;
+			if (newBookIdx < 0 || newBookIdx >= ALL_BOOKS.length) return;
+			
+			const newBook = ALL_BOOKS[newBookIdx];
+			const newDataFile = this.getDataFileForBook(newBook);
+			if (!newDataFile) return;
+			
+			const newScriptureData = await this.plugin.getScriptureData(newDataFile);
+			if (!newScriptureData[newBook]) return;
+			
+			const newChapters = Object.keys(newScriptureData[newBook])
+				.filter(k => k !== "heading")
+				.map(Number)
+				.sort((a, b) => a - b);
+			
+			// Going forward: first chapter; going backward: last chapter
+			const targetChapter = direction > 0 ? String(newChapters[0]) : String(newChapters[newChapters.length - 1]);
+			
+			this.currentBook = newBook;
+			this.currentChapter = targetChapter;
+			this.currentVerse = "1";
+			this.currentFile = null;
+			await this.renderChapter(newBook, targetChapter, "1", false);
+		}
+	}
+
 	async onClose(): Promise<void> {
-		// Clean up when view is closed
+		this.dismissContextMenu();
+		if (this.updateDebounceTimer) clearTimeout(this.updateDebounceTimer);
 	}
 }
 
-export default class SqlitePlugin extends Plugin {
-	settings: SqlitePluginSettings;
+export default class StandardWorksPlugin extends Plugin {
+	settings: StandardWorksPluginSettings;
 	SQL: SqlJsStatic | null = null;
 	db: Database | null = null;
 	private observer: MutationObserver;
+	private scriptureDataCache = new Map<string, ScriptureData>();
 	
 	// Store last search state
 	lastSearchTerm: string = "";
 	lastSearchResults: SearchResult[] = [];
 	lastSearchPage: number = 0;
+	lastSearchIsRegex: boolean = false;
 	lastSelectedWorks: { ot: boolean; nt: boolean; bom: boolean; dac: boolean; pogp: boolean } = {
 		ot: true,
 		nt: true,
@@ -843,7 +681,7 @@ export default class SqlitePlugin extends Plugin {
 			id: "go-to-verse",
 			name: "Go to verse",
 			callback: () => {
-				new GoToVerseModal(this.app, (reference: string) => {
+				new ScriptureReferenceSuggestModal(this.app, this, (reference: string) => {
 					this.goToVerse(reference);
 				}).open();
 			},
@@ -855,7 +693,7 @@ export default class SqlitePlugin extends Plugin {
 			callback: () => {
 				// Get current active file name as default reference
 				const activeFile = this.app.workspace.getActiveFile();
-				var defaultReference = activeFile ? activeFile.basename : "";
+				let defaultReference = activeFile ? activeFile.basename : "";
 
 				// Split the filename after the hyphen
 				defaultReference = defaultReference.replace(".", ":") // Replace ":" with "."
@@ -867,14 +705,17 @@ export default class SqlitePlugin extends Plugin {
 						return;
 					}
 					try {
-						const query = `SELECT content FROM ldss WHERE reference = '${reference}'`;
-						const result = this.db.exec(query);
+						const stmt = this.db.prepare("SELECT content FROM ldss WHERE reference = :ref");
+						stmt.bind({ ":ref": reference });
 						
-						if (result.length === 0 || result[0].values.length === 0) {
-							new ResultsModal(this.app, `No results found for reference: ${reference}`).open();
-						} else {
-							const content = result[0].values[0][0] as string;
+						if (stmt.step()) {
+							const row = stmt.get();
+							const content = row[0] as string;
+							stmt.free();
 							new ResultsModal(this.app, `Reference: ${reference}\n\n${content}`).open();
+						} else {
+							stmt.free();
+							new ResultsModal(this.app, `No results found for reference: ${reference}`).open();
 						}
 					} catch (err) {
 						console.error("Scripture search error:", err);
@@ -900,7 +741,7 @@ export default class SqlitePlugin extends Plugin {
 			}
 		});
 
-		this.addSettingTab(new SqlitePluginSettingTab(this.app, this));
+		this.addSettingTab(new StandardWorksPluginSettingTab(this.app, this));
 		
 		// Open Scripture Context View by default
 		this.activateView();
@@ -909,18 +750,22 @@ export default class SqlitePlugin extends Plugin {
 	private async displayResults(tries: number = 0) {
 		// Get current active file name as default reference
 		const activeFile = this.app.workspace.getActiveFile();
-		var defaultReference = activeFile ? activeFile.basename : "";
+		let defaultReference = activeFile ? activeFile.basename : "";
 
 		defaultReference = defaultReference.replace(".", ":") // Replace ":" with "."
 		// Remove any leading or trailing whitespace
-		const query = `SELECT content FROM ldss WHERE reference = '${defaultReference}'`;
 		try{
-			const result = this.db.exec(query);
-			if (result.length === 0 || result[0].values.length === 0) {
-				new ResultsModal(this.app, `No results found for reference: ${defaultReference}`).open();
-			} else {
-				const content = result[0].values[0][0] as string;
+			const stmt = this.db.prepare("SELECT content FROM ldss WHERE reference = :ref");
+			stmt.bind({ ":ref": defaultReference });
+			
+			if (stmt.step()) {
+				const row = stmt.get();
+				const content = row[0] as string;
+				stmt.free();
 				new ResultsModal(this.app, `Reference: ${defaultReference}\n\n${content}`).open();
+			} else {
+				stmt.free();
+				new ResultsModal(this.app, `No results found for reference: ${defaultReference}`).open();
 			}
 		} catch (err) {
 			await this.loadDatabase();
@@ -943,35 +788,35 @@ export default class SqlitePlugin extends Plugin {
 		this.observer.disconnect();
 
 		try {
-			var items = Array.from(
+			const items = Array.from(
 				container.querySelectorAll("div.tree-item.search-result")
 			);
 			
 			if (items.length < 2) return;
-			var gc_itmes = []
-			var tg_items = []
-			var verses = []
+			const gcItems: Element[] = [];
+			const tgItems: Element[] = [];
+			const verses: Element[] = [];
 
 			for (const item of items) {
 				const textContent = item.querySelector("div.search-result-file-title")?.textContent || "";
 				if(textContent.includes("April") || textContent.includes("October")) {
-					gc_itmes.push(item)
+					gcItems.push(item)
 				}
 				else if (textContent.includes(".")) {
 					verses.push(item)
 				}
 				else {
-					tg_items.push(item)
+					tgItems.push(item)
 				}
 			}
 
-			gc_itmes.sort((a, b) => {
+			gcItems.sort((a, b) => {
 				const atextContent = a.querySelector("div.search-result-file-title")?.textContent || "";
 				const btextContent = b.querySelector("div.search-result-file-title")?.textContent || "";
 				return btextContent.localeCompare(atextContent);
 			});
 
-			tg_items.sort((a, b) => {
+			tgItems.sort((a, b) => {
 				const atextContent = a.querySelector("div.search-result-file-title")?.textContent || "";
 				const btextContent = b.querySelector("div.search-result-file-title")?.textContent || "";
 				return atextContent.localeCompare(btextContent);
@@ -981,8 +826,8 @@ export default class SqlitePlugin extends Plugin {
 			// Sort by text content
 			verses.sort((a, b) => {
 
-				var aBookInt = -1;
-				var bBookInt = -1;
+				let aBookInt = -1;
+				let bBookInt = -1;
 				const atextContent = a.querySelector("div.search-result-file-title")?.textContent || "";
 				const btextContent = b.querySelector("div.search-result-file-title")?.textContent || "";
 				const aBookStr = atextContent.split(' ').slice(0, -1).join(' ') || "";
@@ -991,7 +836,7 @@ export default class SqlitePlugin extends Plugin {
 				const bChapter = parseInt(b.textContent?.split(' ').slice(-1)[0].split(':')[0] || "");
 				const aVerse = parseInt(a.textContent?.split(' ').slice(-1)[0].split(':')[1] || "");
 				const bVerse = parseInt(b.textContent?.split(' ').slice(-1)[0].split(':')[1] || "");
-				var i = 0;
+				let i = 0;
 				for (const [key, value] of Object.entries(abbreviations)) {
 					if (aBookStr == value) {
 						aBookInt = i;
@@ -1038,11 +883,11 @@ export default class SqlitePlugin extends Plugin {
 				container.appendChild(item);
 			}
 			// Add TG items
-			for (const item of tg_items) {
+			for (const item of tgItems) {
 				container.appendChild(item);
 			}
 			// Add GC items
-			for (const item of gc_itmes) {
+			for (const item of gcItems) {
 				container.appendChild(item);
 			}
 
@@ -1077,6 +922,7 @@ export default class SqlitePlugin extends Plugin {
 		this.db?.close();
 		this.db = null;
 		this.observer.disconnect();
+		this.scriptureDataCache.clear();
 
 		// Clean up the custom view
 		this.app.workspace.detachLeavesOfType(VIEW_TYPE_SCRIPTURE_CONTEXT);
@@ -1205,35 +1051,53 @@ export default class SqlitePlugin extends Plugin {
 		await this.saveData(this.settings);
 	}
 
-	private fileExists(filename: string): TFile | null {
+	async getScriptureData(dataFile: string): Promise<ScriptureData> {
+		const cached = this.scriptureDataCache.get(dataFile);
+		if (cached) return cached;
+
+		const adapter = this.app.vault.adapter;
+		const basePath = (this.manifest as any).dir;
+		const fullPath = `${basePath}/data/${dataFile}`;
+		const jsonContent = await adapter.read(fullPath);
+		const data: ScriptureData = JSON.parse(jsonContent);
+		this.scriptureDataCache.set(dataFile, data);
+		return data;
+	}
+
+	getScriptureDataSync(dataFile: string): ScriptureData | null {
+		return this.scriptureDataCache.get(dataFile) || null;
+	}
+
+	private fileExists(filename: string): boolean {
 		const files = this.app.vault.getFiles();
-		filename = filename + ".md";
+		const target = filename + ".md";
 		for (const file of files) {
-			if (file.name === filename) {
-				return true; // returns the TFile object if found
+			if (file.name === target) {
+				return true;
 			}
 		}
-		new Notice("File not found: " + filename);
+		new Notice("File not found: " + target);
 		return false;
 	}
 
 	private getNumVerses(book: string, chapter: string): string[] {
-		var verses = [];
-		var final_verse = 0;
+		const verses: string[] = [];
+		let finalVerse = 0;
 		const files = this.app.vault.getFiles();
 		for (const file of files) {
 			if (file.name.startsWith(`${book} ${chapter}.`)) {
-				var verse = file.name.split(".")[1];
-				if(parseInt(verse) > final_verse){
-					final_verse = parseInt(verse);
+				const verseStr = file.name.split(".")[1];
+				const verseNum = parseInt(verseStr);
+				if(verseNum > finalVerse){
+					finalVerse = verseNum;
 				}
 			}
 		}
-		if(final_verse == 0){
+		if(finalVerse === 0){
 			new Notice(`Chapter not found: ${book} ${chapter}`);
 			return [];
 		}
-		for (let i = 1; i <= final_verse; i++) {
+		for (let i = 1; i <= finalVerse; i++) {
 			verses.push(i.toString());
 		}
 		return verses;
@@ -1241,19 +1105,14 @@ export default class SqlitePlugin extends Plugin {
 
 	private linkifySelectedText(editor: Editor) {
 		const selectedText = editor.getSelection().trim();
-		var selectedTextFixed = selectedText
+		let selectedTextFixed = selectedText;
 
 		// Get all the words except the last one
-		var book = selectedText.split(" ").slice(0, -1).join(" ");
-		for (const [key, value] of Object.entries(abbreviations)) {
-			if (book.includes(key)) {
-				book = book.replace(key, value);
-				break;
-			}
-		}
+		let book = selectedText.split(" ").slice(0, -1).join(" ");
+		book = abbreviations[book] || book;
 
-		var chapter = "";
-		var verses = [];
+		let chapter = "";
+		let verses: string[] = [];
 
 		if (!selectedText.includes(":")) {
 			chapter = selectedText.split(" ").slice(-1)[0];
@@ -1264,7 +1123,7 @@ export default class SqlitePlugin extends Plugin {
 			verses = selectedText.split(" ").slice(-1)[0].split(":")[1].split(",").map((v: string) => v.trim());
 		}
 
-		var finishedFirst = false;
+		let finishedFirst = false;
 
 		for (const verse of verses) {
 			
@@ -1311,91 +1170,84 @@ export default class SqlitePlugin extends Plugin {
 			return;
 		}
 
-		// Parse the reference (e.g., "John 3:16", "1 Nephi 3:7")
 		const trimmedRef = reference.trim();
-		
-		// Extract book, chapter, and verse
 		let book = "";
 		let chapter = "";
-		let verse = "";
+		let verse = "1";
 		
 		if (trimmedRef.includes(":")) {
-			// Format: "Book Chapter:Verse"
 			const parts = trimmedRef.split(" ");
 			const lastPart = parts[parts.length - 1];
 			const chapterVerse = lastPart.split(":");
-			
 			book = parts.slice(0, -1).join(" ");
 			chapter = chapterVerse[0];
 			verse = chapterVerse[1];
 		} else {
-			new Notice("Invalid format. Use 'Book Chapter:Verse' (e.g., 'John 3:16')");
-			return;
-		}
-		
-		// Expand abbreviations
-		for (const [key, value] of Object.entries(abbreviations)) {
-			if (book.includes(key)) {
-				book = book.replace(key, value);
-				break;
+			// Chapter-only: "John 3" → opens John 3.1
+			const parts = trimmedRef.split(" ");
+			if (parts.length < 2) {
+				new Notice("Invalid format. Use 'Book Chapter' or 'Book Chapter:Verse'");
+				return;
 			}
+			chapter = parts[parts.length - 1];
+			book = parts.slice(0, -1).join(" ");
 		}
 		
-		// Format the filename
+		book = abbreviations[book] || book;
+		
 		const filename = `${book} ${chapter}.${verse}`;
-		
-		// Check if file exists
 		const files = this.app.vault.getFiles();
-		let targetFile: TFile | null = null;
-		
-		for (const file of files) {
-			if (file.name === `${filename}.md`) {
-				targetFile = file;
-				break;
-			}
-		}
+		const targetFile = files.find(f => f.basename === filename);
 		
 		if (!targetFile) {
 			new Notice(`Verse not found: ${filename}`);
 			return;
 		}
 		
-		// Open the file in a new tab
 		this.app.workspace.getLeaf('tab').openFile(targetFile);
 	}
 	
-	async searchScriptures(searchTerm: string, dataFiles: string[]): Promise<SearchResult[]> {
+	async searchScriptures(searchTerm: string, dataFiles: string[], useRegex: boolean = false): Promise<SearchResult[]> {
 		const results: SearchResult[] = [];
-		const searchLower = searchTerm.toLowerCase();
 		
-		const adapter = this.app.vault.adapter;
-		const basePath = (this.manifest as any).dir;
+		// Build match function based on mode
+		let matchFn: (text: string) => boolean;
+		if (useRegex) {
+			try {
+				// Convert wildcard syntax: * → .*, ? → . (only if not already valid regex)
+				let pattern = searchTerm;
+				// Replace unescaped * not preceded by . with .*
+				pattern = pattern.replace(/(?<!\.)\*/g, '.*');
+				// Replace unescaped ? not preceded by \ with .
+				pattern = pattern.replace(/(?<!\\)\?/g, '.');
+				const regex = new RegExp(pattern, 'i');
+				matchFn = (text: string) => regex.test(text);
+			} catch (e) {
+				new Notice(`Invalid regex pattern: ${e.message}`);
+				return results;
+			}
+		} else {
+			const searchLower = searchTerm.toLowerCase();
+			matchFn = (text: string) => text.toLowerCase().includes(searchLower);
+		}
 		
 		for (const dataFile of dataFiles) {
 			try {
-				const fullPath = `${basePath}/data/${dataFile}`;
-				const jsonContent = await adapter.read(fullPath);
-				const scriptureData: ScriptureData = JSON.parse(jsonContent);
+				const scriptureData = await this.getScriptureData(dataFile);
 				
-				// Iterate through all books in this data file
 				for (const bookName in scriptureData) {
 					const bookData = scriptureData[bookName];
 					
-					// Iterate through all chapters
 					for (const chapterKey in bookData) {
-						// Skip the heading property
 						if (chapterKey === "heading") continue;
 						
 						const chapterData = bookData[chapterKey];
 						
-						// Check if it's a valid chapter object
 						if (typeof chapterData === "object" && chapterData !== null) {
-							// Iterate through all verses
 							for (const verseKey in chapterData) {
 								const verseText = chapterData[verseKey];
 								
-								// Case-insensitive search
-								if (verseText.toLowerCase().includes(searchLower)) {
+								if (matchFn(verseText)) {
 									results.push({
 										book: bookName,
 										chapter: chapterKey,
@@ -1429,15 +1281,12 @@ class ResultsModal extends Modal {
 	onOpen() {
 		const { contentEl } = this;
 		
-		// Make modal wider to better accommodate text
-		this.modalEl.style.width = "80%";
-		this.modalEl.style.maxWidth = "800px";
+		this.modalEl.addClass("results-modal");
 		
 		contentEl.createEl("h2", { text: "Query Results" });
 		
 		// Create controls div
 		const controlsDiv = contentEl.createEl("div", { cls: "results-controls" });
-		controlsDiv.style.marginBottom = "10px";
 		
 		// Add word wrap toggle
 		const wrapToggleLabel = controlsDiv.createEl("label");
@@ -1451,22 +1300,12 @@ class ResultsModal extends Modal {
 		
 		// Create results container
 		const resultsContainer = contentEl.createEl("div", { cls: "results-container" });
-		resultsContainer.style.border = "1px solid var(--background-modifier-border)";
-		resultsContainer.style.borderRadius = "4px";
-		resultsContainer.style.backgroundColor = "var(--background-secondary)";
 		
 		// Create pre element for the content
 		const pre = resultsContainer.createEl("pre", { text: this.results });
-		pre.style.maxHeight = "500px";
-		pre.style.overflowY = "auto";
 		pre.style.overflowX = this.wordWrap ? "hidden" : "auto";
-		pre.style.padding = "10px";
-		pre.style.margin = "0";
-		pre.style.fontFamily = "serif";
 		pre.style.whiteSpace = this.wordWrap ? "pre-wrap" : "pre";
 		pre.style.wordBreak = this.wordWrap ? "break-word" : "normal";
-		pre.style.userSelect = "text";
-		pre.style.cursor = "text";
 		
 		// Handle word wrap toggle
 		wrapToggle.addEventListener("change", () => {
@@ -1528,45 +1367,103 @@ class ReferenceSearchModal extends Modal {
 	}
 }
 
-class GoToVerseModal extends Modal {
-	onSubmit: (reference: string) => void;
+class ScriptureReferenceSuggestModal extends SuggestModal<string> {
+	private plugin: StandardWorksPlugin;
+	private onChoose: (reference: string) => void;
+	private allReferences: string[] = [];
 
-	constructor(app: App, onSubmit: (reference: string) => void) {
+	constructor(app: App, plugin: StandardWorksPlugin, onChoose: (reference: string) => void) {
 		super(app);
-		this.onSubmit = onSubmit;
+		this.plugin = plugin;
+		this.onChoose = onChoose;
+		this.setPlaceholder("Type a scripture reference (e.g., John 3, 1 Nephi 3:7)");
+		this.buildReferenceList();
 	}
 
-	onOpen() {
-		const { contentEl } = this;
-		contentEl.createEl("h2", { text: "Go to verse" });
-
-		const inputEl = contentEl.createEl("input", {
-			type: "text",
-			attr: { 
-				placeholder: "e.g., John 3:16",
-				style: "width: 100%; margin-bottom: 10px; box-sizing: border-box;"
+	private async buildReferenceList(): Promise<void> {
+		const refs: string[] = [];
+		for (const [dataFile, books] of Object.entries(BOOKS_BY_FILE)) {
+			const scriptureData = await this.plugin.getScriptureData(dataFile);
+			for (const [, fullName] of Object.entries(books)) {
+				if (!scriptureData[fullName]) continue;
+				const chapters = Object.keys(scriptureData[fullName])
+					.filter(k => k !== "heading")
+					.map(Number)
+					.sort((a, b) => a - b);
+				for (const ch of chapters) {
+					refs.push(`${fullName} ${ch}`);
+				}
 			}
-		});
-		
-		// Auto-focus
-		inputEl.focus();
-		
-		inputEl.addEventListener("keydown", (e) => {
-			if (e.key === "Enter") {
-				this.onSubmit(inputEl.value);
-				this.close();
-			}
-		});
-
-		const submitBtn = contentEl.createEl("button", { text: "Go" });
-		submitBtn.addEventListener("click", () => {
-			this.onSubmit(inputEl.value);
-			this.close();
-		});
+		}
+		this.allReferences = refs;
 	}
 
-	onClose() {
-		this.contentEl.empty();
+	getSuggestions(query: string): string[] {
+		const q = query.toLowerCase().trim();
+		if (!q) return this.allReferences.slice(0, 50);
+
+		// If query contains ':', expand matching chapter into per-verse suggestions
+		if (q.includes(":")) {
+			return this.getVerseSuggestions(q);
+		}
+
+		// Fuzzy match against chapter-level references
+		return this.allReferences
+			.filter(ref => {
+				const refLower = ref.toLowerCase();
+				// Check if all query chars appear in order (fuzzy)
+				let qi = 0;
+				for (let ri = 0; ri < refLower.length && qi < q.length; ri++) {
+					if (refLower[ri] === q[qi]) qi++;
+				}
+				return qi === q.length;
+			})
+			.slice(0, 50);
+	}
+
+	private getVerseSuggestions(query: string): string[] {
+		const colonIdx = query.lastIndexOf(":");
+		const beforeColon = query.substring(0, colonIdx).trim();
+		const versePrefix = query.substring(colonIdx + 1).trim();
+
+		// Find which chapter-level ref matches the part before the colon
+		const matchingChapter = this.allReferences.find(
+			ref => ref.toLowerCase() === beforeColon
+		) || this.allReferences.find(
+			ref => ref.toLowerCase().startsWith(beforeColon)
+		);
+
+		if (!matchingChapter) return [];
+
+		// Parse book and chapter from the matched ref
+		const lastSpace = matchingChapter.lastIndexOf(" ");
+		const bookName = matchingChapter.substring(0, lastSpace);
+		const chapter = matchingChapter.substring(lastSpace + 1);
+		const dataFile = BOOK_TO_FILE[bookName];
+		if (!dataFile) return [];
+
+		// Look up verses synchronously from cache (already loaded during buildReferenceList)
+		const cached = this.plugin.getScriptureDataSync(dataFile);
+		if (!cached || !cached[bookName] || !cached[bookName][chapter]) return [];
+
+		const chapterData = cached[bookName][chapter] as { [key: string]: string };
+		const verses = Object.keys(chapterData)
+			.filter(k => k !== "heading")
+			.map(Number)
+			.sort((a, b) => a - b);
+
+		return verses
+			.filter(v => String(v).startsWith(versePrefix))
+			.map(v => `${bookName} ${chapter}:${v}`)
+			.slice(0, 50);
+	}
+
+	renderSuggestion(ref: string, el: HTMLElement): void {
+		el.createEl("div", { text: ref });
+	}
+
+	onChooseSuggestion(ref: string): void {
+		this.onChoose(ref);
 	}
 }
 
@@ -1578,13 +1475,16 @@ interface SearchResult {
 }
 
 class ScriptureSearchModal extends Modal {
-	plugin: SqlitePlugin;
+	plugin: StandardWorksPlugin;
 	private searchResults: SearchResult[] = [];
 	private currentPage: number = 0;
 	private readonly resultsPerPage: number = 50;
 	private resultsContainer: HTMLElement;
 	private paginationContainer: HTMLElement;
 	private searchTerm: string = "";
+	private isRegex: boolean = false;
+	private selectedIndex: number = -1;
+	private inputEl: HTMLInputElement;
 	
 	// Checkboxes for each work
 	private otCheckbox: HTMLInputElement;
@@ -1592,8 +1492,9 @@ class ScriptureSearchModal extends Modal {
 	private bomCheckbox: HTMLInputElement;
 	private dacCheckbox: HTMLInputElement;
 	private pogpCheckbox: HTMLInputElement;
+	private regexCheckbox: HTMLInputElement;
 
-	constructor(app: App, plugin: SqlitePlugin) {
+	constructor(app: App, plugin: StandardWorksPlugin) {
 		super(app);
 		this.plugin = plugin;
 	}
@@ -1606,45 +1507,35 @@ class ScriptureSearchModal extends Modal {
 			this.searchResults = this.plugin.lastSearchResults;
 			this.searchTerm = this.plugin.lastSearchTerm;
 			this.currentPage = this.plugin.lastSearchPage;
+			this.isRegex = this.plugin.lastSearchIsRegex;
 		}
 		
 		// Make modal wider
-		this.modalEl.style.width = "85%";
-		this.modalEl.style.maxWidth = "1000px";
+		this.modalEl.addClass("scripture-search-modal");
 		
-		contentEl.style.display = "flex";
-		contentEl.style.flexDirection = "column";
-		contentEl.style.overflow = "hidden";
-		
-		contentEl.createEl("h2", { text: "Search Scriptures" });
+		// Header row with title and regex toggle
+		const headerRow = contentEl.createEl("div", { cls: "search-header-row" });
+		headerRow.createEl("h2", { text: "Search Scriptures" });
+		const regexLabel = headerRow.createEl("label", { cls: "search-regex-toggle" });
+		this.regexCheckbox = regexLabel.createEl("input", { attr: { type: "checkbox" } });
+		if (this.isRegex) this.regexCheckbox.checked = true;
+		regexLabel.appendText(" Regex/Wildcard");
 		
 		// Search input container
 		const searchContainer = contentEl.createEl("div", { cls: "search-input-container" });
-		searchContainer.style.marginBottom = "15px";
-		searchContainer.style.display = "flex";
-		searchContainer.style.alignItems = "center";
-		searchContainer.style.gap = "10px";
 		
-		const inputEl = searchContainer.createEl("input", {
+		this.inputEl = searchContainer.createEl("input", {
 			type: "text",
 			attr: { 
-				placeholder: "Enter search phrase...",
+				placeholder: "Enter search phrase (use * for wildcard, or regex)...",
 				value: this.searchTerm
 			}
 		});
-		inputEl.style.flex = "1";
-		inputEl.style.padding = "8px 12px";
-		inputEl.style.paddingLeft = "32px";
 		
 		const searchBtn = searchContainer.createEl("button", { text: "Search" });
-		searchBtn.style.padding = "8px 16px";
 		
 		// Checkboxes container
 		const checkboxContainer = contentEl.createEl("div", { cls: "scripture-works-checkboxes" });
-		checkboxContainer.style.marginBottom = "15px";
-		checkboxContainer.style.display = "flex";
-		checkboxContainer.style.gap = "15px";
-		checkboxContainer.style.flexWrap = "wrap";
 		
 		// Create checkboxes for each work (restore saved state)
 		this.otCheckbox = this.createCheckbox(checkboxContainer, "Old Testament", this.plugin.lastSelectedWorks.ot);
@@ -1655,37 +1546,32 @@ class ScriptureSearchModal extends Modal {
 		
 		// Results container
 		this.resultsContainer = contentEl.createEl("div", { cls: "search-results-container" });
-		this.resultsContainer.style.flex = "1";
-		this.resultsContainer.style.overflowY = "auto";
-		this.resultsContainer.style.border = "1px solid var(--background-modifier-border)";
-		this.resultsContainer.style.borderRadius = "4px";
-		this.resultsContainer.style.padding = "10px";
-		this.resultsContainer.style.backgroundColor = "var(--background-secondary)";
-		this.resultsContainer.style.marginBottom = "10px";
 		
 		// Pagination container
 		this.paginationContainer = contentEl.createEl("div", { cls: "pagination-container" });
-		this.paginationContainer.style.display = "flex";
-		this.paginationContainer.style.justifyContent = "center";
-		this.paginationContainer.style.alignItems = "center";
-		this.paginationContainer.style.gap = "10px";
-		this.paginationContainer.style.paddingTop = "10px";
-		this.paginationContainer.style.borderTop = "1px solid var(--background-modifier-border)";
 		
 		// Auto-focus on input and select existing text
-		inputEl.focus();
-		inputEl.select();
+		this.inputEl.focus();
+		this.inputEl.select();
 		
-		// Search on Enter key
-		inputEl.addEventListener("keydown", (e) => {
-			if (e.key === "Enter") {
-				this.performSearch(inputEl.value);
+		// Keyboard handler for search input and result navigation
+		this.inputEl.addEventListener("keydown", (e) => {
+			if (e.key === "Enter" && this.selectedIndex === -1) {
+				this.performSearch(this.inputEl.value);
+			} else if (e.key === "Enter" && this.selectedIndex >= 0) {
+				this.openSelectedResult();
+			} else if (e.key === "ArrowDown") {
+				e.preventDefault();
+				this.moveSelection(1);
+			} else if (e.key === "ArrowUp") {
+				e.preventDefault();
+				this.moveSelection(-1);
 			}
 		});
 		
 		// Search on button click
 		searchBtn.addEventListener("click", () => {
-			this.performSearch(inputEl.value);
+			this.performSearch(this.inputEl.value);
 		});
 		
 		// Initial message or display saved results
@@ -1701,15 +1587,10 @@ class ScriptureSearchModal extends Modal {
 	
 	private createCheckbox(container: HTMLElement, label: string, checked: boolean): HTMLInputElement {
 		const labelEl = container.createEl("label");
-		labelEl.style.display = "flex";
-		labelEl.style.alignItems = "center";
-		labelEl.style.gap = "5px";
-		labelEl.style.cursor = "pointer";
 		
 		const checkbox = labelEl.createEl("input", {
 			attr: { type: "checkbox", checked: checked }
 		});
-		checkbox.style.cursor = "pointer";
 		
 		labelEl.appendText(label);
 		
@@ -1723,7 +1604,9 @@ class ScriptureSearchModal extends Modal {
 		}
 		
 		this.searchTerm = searchPhrase.trim();
+		this.isRegex = this.regexCheckbox.checked;
 		this.currentPage = 0;
+		this.selectedIndex = -1;
 		
 		// Show loading message
 		this.resultsContainer.empty();
@@ -1750,11 +1633,12 @@ class ScriptureSearchModal extends Modal {
 		}
 		
 		// Perform the search
-		this.searchResults = await this.plugin.searchScriptures(this.searchTerm, selectedWorks);
+		this.searchResults = await this.plugin.searchScriptures(this.searchTerm, selectedWorks, this.isRegex);
 		
 		// Save search state to plugin
 		this.plugin.lastSearchTerm = this.searchTerm;
 		this.plugin.lastSearchResults = this.searchResults;
+		this.plugin.lastSearchIsRegex = this.isRegex;
 		this.plugin.lastSelectedWorks = {
 			ot: this.otCheckbox.checked,
 			nt: this.ntCheckbox.checked,
@@ -1780,13 +1664,10 @@ class ScriptureSearchModal extends Modal {
 		}
 		
 		// Show result count
-		const countEl = this.resultsContainer.createEl("div", { 
+		this.resultsContainer.createEl("div", { 
 			text: `Found ${this.searchResults.length} result${this.searchResults.length === 1 ? '' : 's'}`,
 			cls: "search-result-count"
 		});
-		countEl.style.marginBottom = "15px";
-		countEl.style.fontWeight = "bold";
-		countEl.style.color = "var(--text-normal)";
 		
 		// Calculate pagination
 		const startIdx = this.currentPage * this.resultsPerPage;
@@ -1794,53 +1675,29 @@ class ScriptureSearchModal extends Modal {
 		const pageResults = this.searchResults.slice(startIdx, endIdx);
 		
 		// Display results for current page
-		for (const result of pageResults) {
+		for (let i = 0; i < pageResults.length; i++) {
+			const result = pageResults[i];
+			const globalIndex = startIdx + i;
 			const resultEl = this.resultsContainer.createEl("div", { cls: "search-result-item" });
-			resultEl.style.marginBottom = "15px";
-			resultEl.style.padding = "10px";
-			resultEl.style.border = "1px solid var(--background-modifier-border)";
-			resultEl.style.borderRadius = "4px";
-			resultEl.style.backgroundColor = "var(--background-primary)";
+			resultEl.dataset.index = String(globalIndex);
+			
+			if (globalIndex === this.selectedIndex) {
+				resultEl.addClass("search-result-selected");
+			}
 			
 			// Reference link
 			const refLink = resultEl.createEl("a", { 
 				text: `${result.book} ${result.chapter}:${result.verse}`,
 				cls: "search-result-reference"
 			});
-			refLink.style.fontWeight = "bold";
-			refLink.style.color = "var(--text-accent)";
-			refLink.style.cursor = "pointer";
-			refLink.style.marginBottom = "5px";
-			refLink.style.display = "block";
-			refLink.style.fontSize = "1.1em";
 			
-			refLink.addEventListener("click", (e) => {
+			resultEl.addEventListener("click", (e) => {
 				e.preventDefault();
-				const filename = `${result.book} ${result.chapter}.${result.verse}`;
-				const files = this.app.vault.getFiles();
-				let targetFile: TFile | null = null;
-				
-				for (const file of files) {
-					if (file.name === `${filename}.md`) {
-						targetFile = file;
-						break;
-					}
-				}
-				
-				if (targetFile) {
-					this.app.workspace.getLeaf('tab').openFile(targetFile);
-					this.close();
-				} else {
-					new Notice(`Verse file not found: ${filename}`);
-				}
+				this.openResult(result);
 			});
 			
 			// Verse text with highlighted search term
 			const textEl = resultEl.createEl("div", { cls: "search-result-text" });
-			textEl.style.lineHeight = "1.6";
-			textEl.style.color = "var(--text-normal)";
-			textEl.style.userSelect = "text";
-			textEl.style.cursor = "text";
 			textEl.innerHTML = this.highlightText(result.text, this.searchTerm);
 		}
 		
@@ -1848,8 +1705,59 @@ class ScriptureSearchModal extends Modal {
 		this.updatePagination();
 	}
 	
+	private openResult(result: SearchResult) {
+		const filename = `${result.book} ${result.chapter}.${result.verse}`;
+		const files = this.app.vault.getFiles();
+		let targetFile: TFile | null = null;
+		
+		for (const file of files) {
+			if (file.name === `${filename}.md`) {
+				targetFile = file;
+				break;
+			}
+		}
+		
+		if (targetFile) {
+			this.app.workspace.getLeaf('tab').openFile(targetFile);
+			this.close();
+		} else {
+			new Notice(`Verse file not found: ${filename}`);
+		}
+	}
+	
+	private openSelectedResult() {
+		if (this.selectedIndex < 0 || this.selectedIndex >= this.searchResults.length) return;
+		this.openResult(this.searchResults[this.selectedIndex]);
+	}
+	
+	private moveSelection(delta: number) {
+		const startIdx = this.currentPage * this.resultsPerPage;
+		const endIdx = Math.min(startIdx + this.resultsPerPage, this.searchResults.length);
+		if (endIdx <= startIdx) return;
+		
+		// Remove previous selection highlight
+		const prev = this.resultsContainer.querySelector(".search-result-selected");
+		if (prev) prev.removeClass("search-result-selected");
+		
+		if (this.selectedIndex === -1) {
+			// First navigation: select first or last depending on direction
+			this.selectedIndex = delta > 0 ? startIdx : endIdx - 1;
+		} else {
+			this.selectedIndex += delta;
+			// Clamp to current page bounds
+			if (this.selectedIndex < startIdx) this.selectedIndex = startIdx;
+			if (this.selectedIndex >= endIdx) this.selectedIndex = endIdx - 1;
+		}
+		
+		// Apply selection highlight and scroll into view
+		const el = this.resultsContainer.querySelector(`[data-index="${this.selectedIndex}"]`) as HTMLElement;
+		if (el) {
+			el.addClass("search-result-selected");
+			el.scrollIntoView({ block: "nearest" });
+		}
+	}
+	
 	private highlightText(text: string, searchTerm: string): string {
-		// Escape HTML special characters in the text
 		const escapeHtml = (str: string) => {
 			const div = document.createElement('div');
 			div.textContent = str;
@@ -1858,10 +1766,20 @@ class ScriptureSearchModal extends Modal {
 		
 		const escapedText = escapeHtml(text);
 		
-		// Create a case-insensitive regex
-		const regex = new RegExp(`(${searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+		let regex: RegExp;
+		if (this.isRegex) {
+			try {
+				let pattern = searchTerm;
+				pattern = pattern.replace(/(?<!\.)\*/g, '.*');
+				pattern = pattern.replace(/(?<!\\)\?/g, '.');
+				regex = new RegExp(`(${pattern})`, 'gi');
+			} catch {
+				return escapedText;
+			}
+		} else {
+			regex = new RegExp(`(${searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+		}
 		
-		// Replace with highlighted version
 		return escapedText.replace(regex, '<mark style="background-color: var(--text-highlight-bg); color: var(--text-normal); padding: 2px 0;">$1</mark>');
 	}
 	
@@ -1875,7 +1793,6 @@ class ScriptureSearchModal extends Modal {
 		// Previous button
 		const prevBtn = this.paginationContainer.createEl("button", { text: "Previous" });
 		prevBtn.disabled = this.currentPage === 0;
-		prevBtn.style.padding = "5px 15px";
 		prevBtn.addEventListener("click", () => {
 			if (this.currentPage > 0) {
 				this.currentPage--;
@@ -1889,12 +1806,10 @@ class ScriptureSearchModal extends Modal {
 		const pageInfo = this.paginationContainer.createEl("span", { 
 			text: `Page ${this.currentPage + 1} of ${totalPages}`
 		});
-		pageInfo.style.color = "var(--text-muted)";
 		
 		// Next button
 		const nextBtn = this.paginationContainer.createEl("button", { text: "Next" });
 		nextBtn.disabled = this.currentPage >= totalPages - 1;
-		nextBtn.style.padding = "5px 15px";
 		nextBtn.addEventListener("click", () => {
 			if (this.currentPage < totalPages - 1) {
 				this.currentPage++;
@@ -1910,10 +1825,10 @@ class ScriptureSearchModal extends Modal {
 	}
 }
 
-class SqlitePluginSettingTab extends PluginSettingTab {
-	plugin: SqlitePlugin;
+class StandardWorksPluginSettingTab extends PluginSettingTab {
+	plugin: StandardWorksPlugin;
 
-	constructor(app: App, plugin: SqlitePlugin) {
+	constructor(app: App, plugin: StandardWorksPlugin) {
 		super(app, plugin);
 		this.plugin = plugin;
 	}
@@ -1922,7 +1837,7 @@ class SqlitePluginSettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 		containerEl.empty();
 
-		containerEl.createEl("h2", { text: "SQLite Plugin Settings" });
+		containerEl.createEl("h2", { text: "Standard Works Plugin Settings" });
 
 		new Setting(containerEl)
 			.setName("Order Backlinks")
