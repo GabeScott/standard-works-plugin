@@ -3,6 +3,7 @@
 
 # Allow only these files
 !main.js
+!main.ts
 !manifest.json
 !styles.css
 !LICENSE
