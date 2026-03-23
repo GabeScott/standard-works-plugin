@@ -121,6 +121,7 @@ class ScriptureContextView extends ItemView {
 	private currentChapter: string | null = null;
 	private currentVerse: string | null = null;
 	private updateOnFileChange: boolean = true;
+	private chapterHeaderEl: HTMLElement;
 
 	constructor(leaf: WorkspaceLeaf, plugin: SqlitePlugin) {
 		super(leaf);
@@ -206,6 +207,18 @@ class ScriptureContextView extends ItemView {
 			this.updateOnFileChange = toggleInput.checked;
 		});
 		
+		// Create floating chapter header
+		this.chapterHeaderEl = this.contentEl.createDiv({ cls: "scripture-chapter-header" });
+		this.chapterHeaderEl.style.padding = "6px 10px";
+		this.chapterHeaderEl.style.borderBottom = "1px solid var(--background-modifier-border)";
+		this.chapterHeaderEl.style.flexShrink = "0";
+		this.chapterHeaderEl.style.fontWeight = "bold";
+		this.chapterHeaderEl.style.fontSize = "0.95em";
+		this.chapterHeaderEl.style.color = "var(--text-muted)";
+		this.chapterHeaderEl.style.userSelect = "text";
+		this.chapterHeaderEl.style.cursor = "text";
+		this.chapterHeaderEl.setText("—");
+
 		// Create content container that will be updated
 		this.contentContainer = this.contentEl.createDiv({ cls: "scripture-context-content" });
 		this.contentContainer.style.flex = "1";
@@ -292,11 +305,8 @@ class ScriptureContextView extends ItemView {
 				
 				const chapterData = scriptureData[book][chapter] as { [verse: string]: string };
 				
-				const currentVerseEl = this.contentContainer.createDiv({ cls: "current-verse" });
-				const chapterTitle = currentVerseEl.createEl("h5", { text: `${book} ${chapter}` });
-				chapterTitle.style.userSelect = "text";
-				chapterTitle.style.cursor = "text";
-				
+				this.chapterHeaderEl.setText(`${book} ${chapter}`);
+
 				const heading = scriptureData[book].heading;
 				if (heading && typeof heading === "string") {
 					const headingEl = this.contentContainer.createDiv({ cls: "chapter-heading" });
@@ -388,11 +398,8 @@ class ScriptureContextView extends ItemView {
 				
 				const chapterData = scriptureData[bookName][chapter] as { [verse: string]: string };
 				
-				const currentVerseEl = this.contentContainer.createDiv({ cls: "current-verse" });
-				const chapterTitle = currentVerseEl.createEl("h5", { text: `${bookName} ${chapter}` });
-				chapterTitle.style.userSelect = "text";
-				chapterTitle.style.cursor = "text";
-				
+				this.chapterHeaderEl.setText(`${bookName} ${chapter}`);
+
 				const heading = scriptureData[bookName].heading;
 				if (heading && typeof heading === "string") {
 					const headingEl = this.contentContainer.createDiv({ cls: "chapter-heading" });
@@ -513,12 +520,8 @@ class ScriptureContextView extends ItemView {
 				
 				const chapterData = scriptureData[bookName][chapter] as { [verse: string]: string };
 				
-				// Display current verse info
-				const currentVerseEl = this.contentContainer.createDiv({ cls: "current-verse" });
-				const chapterTitle = currentVerseEl.createEl("h5", { text: `${bookName} ${chapter}` });
-				chapterTitle.style.userSelect = "text";
-				chapterTitle.style.cursor = "text";
-				
+				this.chapterHeaderEl.setText(`${bookName} ${chapter}`);
+
 				// Display chapter heading if available
 				const heading = scriptureData[bookName].heading;
 				if (heading && typeof heading === "string") {
@@ -1669,8 +1672,9 @@ class ScriptureSearchModal extends Modal {
 		this.paginationContainer.style.paddingTop = "10px";
 		this.paginationContainer.style.borderTop = "1px solid var(--background-modifier-border)";
 		
-		// Auto-focus on input
+		// Auto-focus on input and select existing text
 		inputEl.focus();
+		inputEl.select();
 		
 		// Search on Enter key
 		inputEl.addEventListener("keydown", (e) => {
@@ -1835,6 +1839,8 @@ class ScriptureSearchModal extends Modal {
 			const textEl = resultEl.createEl("div", { cls: "search-result-text" });
 			textEl.style.lineHeight = "1.6";
 			textEl.style.color = "var(--text-normal)";
+			textEl.style.userSelect = "text";
+			textEl.style.cursor = "text";
 			textEl.innerHTML = this.highlightText(result.text, this.searchTerm);
 		}
 		
