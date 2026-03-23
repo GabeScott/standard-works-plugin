@@ -1,0 +1,13 @@
+# Ignore everything
+*
+
+# Allow only these files
+!main.js
+!manifest.json
+!styles.css
+!LICENSE
+!README.md
+!data/
+!data/*
+!.gitignore
+

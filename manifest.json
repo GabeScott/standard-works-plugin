@@ -1,11 +1,1 @@
-{
-	"id": "standard-works-plugin",
-	"name": "Standard Works Plugin",
-	"version": "0.1.0",
-	"minAppVersion": "0.15.0",
-	"description": "Desgined to work with the standard-works-vault, adds useful scripture study functionality.",
-	"author": "GabeScott",
-	"authorUrl": "https://gabescott.github.io",
-	"fundingUrl": "https://gabescott.github.io",
-	"isDesktopOnly": false
-}
+{"id":"standard-works-plugin","name":"Standard Works Plugin","version":"0.1.0","minAppVersion":"0.15.0","description":"Desgined to work with the standard-works-vault, adds useful scripture study functionality.","author":"GabeScott","authorUrl":"https://gabescott.github.io","fundingUrl":"https://gabescott.github.io","isDesktopOnly":false}
