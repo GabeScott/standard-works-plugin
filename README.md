@@ -31,7 +31,8 @@ Designed to work with my [standard-works-vault](https://github.com/GabeScott/sta
 - 🔍 **Full-Text Scripture Search**  
   Search across all five standard works with selectable filters (OT, NT, Book of Mormon, D&C, Pearl of Great Price).
   - **Regex / Wildcard mode** — toggle to use patterns like `faith*`, `\brepent\w+`, or any valid regex
-  - **Keyboard navigation** — Arrow keys to browse results, Enter to open
+  - **Keyboard navigation** — Arrow keys to browse results, Enter to open, Alt+Enter to insert link
+  - **Right-click context menu** — Insert link, copy link, copy reference, copy verse text, or open note
   - Paginated results with highlighted matches
   - Search state persists across modal opens
 
@@ -59,6 +60,7 @@ Say you're studying **Alma 37:6**. The plugin can:
 - Click any verse in the context viewer to open its note
 - Navigate to the previous or next chapter with one click
 - Search the full text of all scriptures for any word or pattern
+- Right-click a search result to insert a wiki link into your current note
 
 ---
 

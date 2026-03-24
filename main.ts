@@ -1485,6 +1485,8 @@ class ScriptureSearchModal extends Modal {
 	private isRegex: boolean = false;
 	private selectedIndex: number = -1;
 	private inputEl: HTMLInputElement;
+	private activeContextMenu: HTMLElement | null = null;
+	private boundDismissMenu: ((e: Event) => void) | null = null;
 	
 	// Checkboxes for each work
 	private otCheckbox: HTMLInputElement;
@@ -1550,13 +1552,18 @@ class ScriptureSearchModal extends Modal {
 		// Pagination container
 		this.paginationContainer = contentEl.createEl("div", { cls: "pagination-container" });
 		
-		// Auto-focus on input and select existing text
-		this.inputEl.focus();
-		this.inputEl.select();
+		// Auto-focus on input and select existing text (deferred so modal is fully rendered)
+		setTimeout(() => {
+			this.inputEl.focus();
+			this.inputEl.select();
+		}, 0);
 		
 		// Keyboard handler for search input and result navigation
 		this.inputEl.addEventListener("keydown", (e) => {
-			if (e.key === "Enter" && this.selectedIndex === -1) {
+			if (e.key === "Enter" && e.altKey && this.selectedIndex >= 0) {
+				e.preventDefault();
+				this.insertSelectedResultLink();
+			} else if (e.key === "Enter" && this.selectedIndex === -1) {
 				this.performSearch(this.inputEl.value);
 			} else if (e.key === "Enter" && this.selectedIndex >= 0) {
 				this.openSelectedResult();
@@ -1696,6 +1703,12 @@ class ScriptureSearchModal extends Modal {
 				this.openResult(result);
 			});
 			
+			resultEl.addEventListener("contextmenu", (e) => {
+				e.preventDefault();
+				e.stopPropagation();
+				this.showResultContextMenu(e, result);
+			});
+			
 			// Verse text with highlighted search term
 			const textEl = resultEl.createEl("div", { cls: "search-result-text" });
 			textEl.innerHTML = this.highlightText(result.text, this.searchTerm);
@@ -1728,6 +1741,97 @@ class ScriptureSearchModal extends Modal {
 	private openSelectedResult() {
 		if (this.selectedIndex < 0 || this.selectedIndex >= this.searchResults.length) return;
 		this.openResult(this.searchResults[this.selectedIndex]);
+	}
+	
+	private insertSelectedResultLink() {
+		if (this.selectedIndex < 0 || this.selectedIndex >= this.searchResults.length) return;
+		this.insertResultLink(this.searchResults[this.selectedIndex]);
+	}
+	
+	private getResultLink(result: SearchResult): string {
+		const filename = `${result.book} ${result.chapter}.${result.verse}`;
+		const display = `${result.book} ${result.chapter}:${result.verse}`;
+		return `[[${filename}|${display}]]`;
+	}
+	
+	private insertResultLink(result: SearchResult) {
+		const link = this.getResultLink(result);
+		const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+		if (activeView) {
+			const editor = activeView.editor;
+			editor.replaceSelection(link);
+			new Notice("Link inserted");
+			this.close();
+		} else {
+			navigator.clipboard.writeText(link);
+			new Notice("No active editor — link copied to clipboard");
+		}
+	}
+	
+	private showResultContextMenu(e: MouseEvent, result: SearchResult): void {
+		this.dismissResultContextMenu();
+		
+		const menu = document.createElement("div");
+		menu.className = "verse-context-menu";
+		menu.style.left = `${e.clientX}px`;
+		menu.style.top = `${e.clientY}px`;
+		menu.style.zIndex = "var(--layer-notice)";
+		
+		const ref = `${result.book} ${result.chapter}:${result.verse}`;
+		
+		const insertLinkItem = menu.createDiv({ cls: "verse-context-menu-item", text: "Insert link" });
+		insertLinkItem.addEventListener("click", () => {
+			this.insertResultLink(result);
+			this.dismissResultContextMenu();
+		});
+		
+		const copyLinkItem = menu.createDiv({ cls: "verse-context-menu-item", text: "Copy link" });
+		copyLinkItem.addEventListener("click", () => {
+			navigator.clipboard.writeText(this.getResultLink(result));
+			new Notice("Link copied");
+			this.dismissResultContextMenu();
+		});
+		
+		const copyRefItem = menu.createDiv({ cls: "verse-context-menu-item", text: "Copy reference" });
+		copyRefItem.addEventListener("click", () => {
+			navigator.clipboard.writeText(ref);
+			new Notice("Reference copied");
+			this.dismissResultContextMenu();
+		});
+		
+		const copyTextItem = menu.createDiv({ cls: "verse-context-menu-item", text: "Copy verse text" });
+		copyTextItem.addEventListener("click", () => {
+			navigator.clipboard.writeText(result.text);
+			new Notice("Verse text copied");
+			this.dismissResultContextMenu();
+		});
+		
+		const openNoteItem = menu.createDiv({ cls: "verse-context-menu-item", text: "Open note" });
+		openNoteItem.addEventListener("click", () => {
+			this.openResult(result);
+			this.dismissResultContextMenu();
+		});
+		
+		document.body.appendChild(menu);
+		this.activeContextMenu = menu;
+		
+		this.boundDismissMenu = () => this.dismissResultContextMenu();
+		setTimeout(() => {
+			document.addEventListener("click", this.boundDismissMenu!);
+			document.addEventListener("contextmenu", this.boundDismissMenu!);
+		}, 0);
+	}
+	
+	private dismissResultContextMenu(): void {
+		if (this.activeContextMenu) {
+			this.activeContextMenu.remove();
+			this.activeContextMenu = null;
+		}
+		if (this.boundDismissMenu) {
+			document.removeEventListener("click", this.boundDismissMenu);
+			document.removeEventListener("contextmenu", this.boundDismissMenu);
+			this.boundDismissMenu = null;
+		}
 	}
 	
 	private moveSelection(delta: number) {
@@ -1821,6 +1925,7 @@ class ScriptureSearchModal extends Modal {
 	}
 
 	onClose() {
+		this.dismissResultContextMenu();
 		this.contentEl.empty();
 	}
 }
