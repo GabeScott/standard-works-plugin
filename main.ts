@@ -87,6 +87,12 @@ class ScriptureContextView extends ItemView {
 	private nextChapterBtn: HTMLButtonElement;
 	private activeContextMenu: HTMLElement | null = null;
 	private boundDismissMenu: ((e: Event) => void) | null = null;
+	private commentaryContainer: HTMLElement;
+	private commentaryInputEl: HTMLInputElement;
+	private commentaryPrevBtn: HTMLButtonElement;
+	private commentaryNextBtn: HTMLButtonElement;
+	private currentCommentaryRef: string | null = null;
+	private currentCommentaryRefOrder: number | null = null;
 
 	constructor(leaf: WorkspaceLeaf, plugin: StandardWorksPlugin) {
 		super(leaf);
@@ -157,9 +163,40 @@ class ScriptureContextView extends ItemView {
 		this.prevChapterBtn.addEventListener("click", () => this.navigateChapter(-1));
 		this.nextChapterBtn.addEventListener("click", () => this.navigateChapter(1));
 
-		// Create content container that will be updated
-		this.contentContainer = this.contentEl.createDiv({ cls: "scripture-context-content" });
-		
+		// Split container holds both scripture and commentary halves
+		const splitContainer = this.contentEl.createDiv({ cls: "scripture-split-container" });
+
+		// Create content container (top half)
+		this.contentContainer = splitContainer.createDiv({ cls: "scripture-context-content" });
+
+		// Commentary panel (bottom half)
+		const commentaryPanel = splitContainer.createDiv({ cls: "commentary-panel" });
+
+		const commentaryHeaderEl = commentaryPanel.createDiv({ cls: "commentary-header" });
+		commentaryHeaderEl.createEl("span", { cls: "commentary-title", text: "Commentary" });
+
+		const commentarySearchContainer = commentaryHeaderEl.createDiv({ cls: "commentary-search-container" });
+		this.commentaryInputEl = commentarySearchContainer.createEl("input", {
+			type: "text",
+			attr: { placeholder: "Reference (e.g., John 3:16)" }
+		});
+		const commentarySearchBtn = commentarySearchContainer.createEl("button", { text: "Go" });
+
+		const commentaryNavEl = commentaryHeaderEl.createDiv({ cls: "commentary-nav" });
+		this.commentaryPrevBtn = commentaryNavEl.createEl("button", { text: "← Prev" });
+		this.commentaryNextBtn = commentaryNavEl.createEl("button", { text: "Next →" });
+		this.commentaryPrevBtn.disabled = true;
+		this.commentaryNextBtn.disabled = true;
+
+		this.commentaryContainer = commentaryPanel.createDiv({ cls: "commentary-content" });
+
+		this.commentaryInputEl.addEventListener("keydown", (e) => {
+			if (e.key === "Enter") this.loadCommentaryByReference(this.commentaryInputEl.value.trim());
+		});
+		commentarySearchBtn.addEventListener("click", () => this.loadCommentaryByReference(this.commentaryInputEl.value.trim()));
+		this.commentaryPrevBtn.addEventListener("click", () => this.navigateCommentary(-1));
+		this.commentaryNextBtn.addEventListener("click", () => this.navigateCommentary(1));
+
 		// Register event to update when active file changes
 		this.registerEvent(
 			this.app.workspace.on("active-leaf-change", () => {
@@ -343,6 +380,7 @@ class ScriptureContextView extends ItemView {
 
 			const verseNumbers = Object.keys(chapterData).filter(k => k !== "heading").sort((a, b) => parseInt(a) - parseInt(b));
 			for (const verseNum of verseNumbers) {
+				const isActive = verseNum === verse;
 				const verseEl = versesContainer.createDiv({ cls: verseNum === verse ? "verse-item active" : "verse-item" });
 
 				if (verseNum === verse) {
@@ -365,6 +403,9 @@ class ScriptureContextView extends ItemView {
 					this.showVerseContextMenu(e, bookName, chapter, verseNum, chapterData[verseNum]);
 				});
 			}
+
+			// Load commentary for the highlighted verse
+			await this.loadCommentaryForVerse(bookName, chapter, verse);
 		} catch (error) {
 			console.error("Error loading scripture context:", error);
 			this.contentContainer.createEl("p", { text: `Error loading context: ${error.message}` });
@@ -376,7 +417,114 @@ class ScriptureContextView extends ItemView {
 		return BOOK_TO_FILE[bookName] || null;
 	}
 
+	private async loadCommentaryForVerse(bookName: string, chapter: string, verse: string): Promise<void> {
+		const reference = `${bookName} ${chapter}:${verse}`;
+		this.commentaryInputEl.value = reference;
+		await this.loadCommentaryByReference(reference);
+	}
+
+	private async loadCommentaryByReference(reference: string): Promise<void> {
+		if (!reference || !this.commentaryContainer) return;
+		if (!this.plugin.db) {
+			this.renderCommentaryContent(null, null);
+			return;
+		}
+		try {
+			const stmt = this.plugin.db.prepare("SELECT content, ref_order FROM ldss WHERE reference = :ref");
+			stmt.bind({ ":ref": reference });
+			if (stmt.step()) {
+				const row = stmt.get();
+				const content = row[0] as string;
+				const refOrder = row[1] as number;
+				stmt.free();
+				this.currentCommentaryRef = reference;
+				this.currentCommentaryRefOrder = refOrder;
+				this.renderCommentaryContent(reference, content);
+				this.updateCommentaryNavButtons();
+			} else {
+				stmt.free();
+				this.currentCommentaryRef = null;
+				this.currentCommentaryRefOrder = null;
+				this.renderCommentaryContent(reference, null);
+				this.updateCommentaryNavButtons();
+			}
+		} catch (err) {
+			console.error("Commentary load error:", err);
+			this.renderCommentaryContent(null, null);
+		}
+	}
+
+	private renderCommentaryContent(reference: string | null, content: string | null): void {
+		this.commentaryContainer.empty();
+		if (content === null) {
+			const msg = reference ? `No commentary for ${reference}` : "No commentary available";
+			this.commentaryContainer.createEl("p", {
+				text: msg,
+				attr: { style: "color: var(--text-muted); padding: 8px;" }
+			});
+			return;
+		}
+		const pre = this.commentaryContainer.createEl("pre", { text: content });
+		pre.style.whiteSpace = "pre-wrap";
+		pre.style.wordBreak = "break-word";
+		pre.style.margin = "0";
+		pre.style.padding = "8px";
+		pre.style.fontFamily = "serif";
+		pre.style.userSelect = "text";
+		pre.style.cursor = "text";
+	}
+
+	private async navigateCommentary(direction: number): Promise<void> {
+		if (this.currentCommentaryRefOrder === null || !this.plugin.db) return;
+		const newOrder = this.currentCommentaryRefOrder + direction;
+		try {
+			const stmt = this.plugin.db.prepare("SELECT reference, content, ref_order FROM ldss WHERE ref_order = :order");
+			stmt.bind({ ":order": newOrder });
+			if (stmt.step()) {
+				const row = stmt.get();
+				const ref = row[0] as string;
+				const content = row[1] as string;
+				const refOrder = row[2] as number;
+				stmt.free();
+				this.currentCommentaryRef = ref;
+				this.currentCommentaryRefOrder = refOrder;
+				this.commentaryInputEl.value = ref;
+				this.renderCommentaryContent(ref, content);
+				this.updateCommentaryNavButtons();
+			} else {
+				stmt.free();
+			}
+		} catch (err) {
+			console.error("Commentary navigation error:", err);
+		}
+	}
+
+	private updateCommentaryNavButtons(): void {
+		if (this.currentCommentaryRefOrder === null || !this.plugin.db) {
+			this.commentaryPrevBtn.disabled = true;
+			this.commentaryNextBtn.disabled = true;
+			return;
+		}
+		try {
+			const prevStmt = this.plugin.db.prepare("SELECT 1 FROM ldss WHERE ref_order = :order");
+			prevStmt.bind({ ":order": this.currentCommentaryRefOrder - 1 });
+			this.commentaryPrevBtn.disabled = !prevStmt.step();
+			prevStmt.free();
+			const nextStmt = this.plugin.db.prepare("SELECT 1 FROM ldss WHERE ref_order = :order");
+			nextStmt.bind({ ":order": this.currentCommentaryRefOrder + 1 });
+			this.commentaryNextBtn.disabled = !nextStmt.step();
+			nextStmt.free();
+		} catch (err) {
+			console.error("Error updating commentary nav buttons:", err);
+		}
+	}
+
 	private updateHighlighting(newVerse: string): void {
+		// Load commentary for the new verse
+		if (this.currentBook && this.currentChapter) {
+			this.loadCommentaryForVerse(this.currentBook, this.currentChapter, newVerse);
+		}
+
 		// Find all verse items in the current chapter
 		const versesContainer = this.contentContainer.querySelector(".chapter-verses") as HTMLElement;
 		if (!versesContainer) return;
@@ -453,10 +601,25 @@ class ScriptureContextView extends ItemView {
 			this.dismissContextMenu();
 		});
 		
+		const copyWikilinkItem = menu.createDiv({ cls: "verse-context-menu-item", text: "Copy wikilink" });
+		copyWikilinkItem.addEventListener("click", () => {
+			const wikilink = `[[${bookName} ${chapter}.${verse}|${bookName} ${chapter}:${verse}]]`;
+			navigator.clipboard.writeText(wikilink);
+			new Notice("Wikilink copied");
+			this.dismissContextMenu();
+		});
+		
 		const copyBothItem = menu.createDiv({ cls: "verse-context-menu-item", text: "Copy reference + text" });
 		copyBothItem.addEventListener("click", () => {
 			navigator.clipboard.writeText(`${bookName} ${chapter}:${verse} — ${text}`);
 			new Notice("Reference and text copied");
+			this.dismissContextMenu();
+		});
+		
+		const searchCommentaryItem = menu.createDiv({ cls: "verse-context-menu-item", text: "Search commentary" });
+		searchCommentaryItem.addEventListener("click", () => {
+			const reference = `${bookName} ${chapter}:${verse}`;
+			new ReferenceSearchModal(this.app, this.plugin, reference).open();
 			this.dismissContextMenu();
 		});
 		
@@ -699,46 +862,11 @@ export default class StandardWorksPlugin extends Plugin {
 				defaultReference = defaultReference.replace(".", ":") // Replace ":" with "."
 				// Remove any leading or trailing whitespace
 				
-				new ReferenceSearchModal(this.app, defaultReference, async (reference: string) => {
-					if (!this.db) {
-						new Notice("Database not loaded.");
-						return;
-					}
-					try {
-						const stmt = this.db.prepare("SELECT content FROM ldss WHERE reference = :ref");
-						stmt.bind({ ":ref": reference });
-						
-						if (stmt.step()) {
-							const row = stmt.get();
-							const content = row[0] as string;
-							stmt.free();
-							new ResultsModal(this.app, `Reference: ${reference}\n\n${content}`).open();
-						} else {
-							stmt.free();
-							new ResultsModal(this.app, `No results found for reference: ${reference}`).open();
-						}
-					} catch (err) {
-						console.error("Scripture search error:", err);
-						new Notice("Error searching for reference.");
-					}
-				}).open();
-			}
-		});
+				new ReferenceSearchModal(this.app, this, defaultReference).open();
+		}
+	});
 
-		this.addCommand({
-			id: "search-scripture-reference-auto",
-			name: "Search Scripture Reference for Current File",
-			callback: async () => {
-				this.displayResults();
-			}
-		});
-
-		this.addCommand({
-			id: "search-scripture-text",
-			name: "Search Scripture Text",
-			callback: () => {
-				new ScriptureSearchModal(this.app, this).open();
-			}
+	this.addCommand({
 		});
 
 		this.addSettingTab(new StandardWorksPluginSettingTab(this.app, this));
@@ -1322,44 +1450,226 @@ class ResultsModal extends Modal {
 }
 
 class ReferenceSearchModal extends Modal {
-	onSubmit: (reference: string) => void;
+	plugin: StandardWorksPlugin;
 	defaultReference: string;
+	private currentReference: string = "";
+	private currentRefOrder: number | null = null;
+	private currentContent: string = "";
+	private resultsContainer: HTMLElement;
+	private inputEl: HTMLInputElement;
+	private prevBtn: HTMLButtonElement;
+	private nextBtn: HTMLButtonElement;
+	private wordWrap: boolean = true;
 
-	constructor(app: App, defaultReference: string, onSubmit: (reference: string) => void) {
+	constructor(app: App, plugin: StandardWorksPlugin, defaultReference: string) {
 		super(app);
+		this.plugin = plugin;
 		this.defaultReference = defaultReference;
-		this.onSubmit = onSubmit;
 	}
 
 	onOpen() {
 		const { contentEl } = this;
-		contentEl.createEl("h2", { text: "Enter Scripture Reference" });
+		
+		// Make modal wider
+		this.modalEl.addClass("scripture-search-modal");
+		
+		contentEl.createEl("h2", { text: "Search Scripture Commentary" });
 
-		const inputEl = contentEl.createEl("input", {
+		// Search input container
+		const searchContainer = contentEl.createEl("div", { cls: "search-input-container" });
+		
+		this.inputEl = searchContainer.createEl("input", {
 			type: "text",
 			attr: { 
 				placeholder: "e.g., John 3:16",
-				style: "width: 100%; margin-bottom: 10px;",
 				value: this.defaultReference
 			}
 		});
 		
-		// Auto-focus and select all text in input
-		inputEl.focus();
-		inputEl.select();
+		const searchBtn = searchContainer.createEl("button", { text: "Search" });
 		
-		inputEl.addEventListener("keydown", (e) => {
+		// Navigation container
+		const navContainer = contentEl.createEl("div", { cls: "pagination-container" });
+		this.prevBtn = navContainer.createEl("button", { text: "Previous" });
+		this.prevBtn.disabled = true;
+		this.nextBtn = navContainer.createEl("button", { text: "Next" });
+		this.nextBtn.disabled = true;
+		
+		this.prevBtn.addEventListener("click", () => this.navigate(-1));
+		this.nextBtn.addEventListener("click", () => this.navigate(1));
+		
+		// Create controls div for word wrap
+		const controlsDiv = contentEl.createEl("div", { cls: "results-controls" });
+		const wrapToggleLabel = controlsDiv.createEl("label");
+		const wrapToggle = wrapToggleLabel.createEl("input", {
+			attr: { 
+				type: "checkbox",
+				checked: this.wordWrap
+			}
+		});
+		wrapToggleLabel.append(" Word Wrap");
+		
+		// Results container
+		this.resultsContainer = contentEl.createEl("div", { cls: "results-container" });
+		this.resultsContainer.createEl("p", { 
+			text: "Enter a scripture reference and click Search.",
+			attr: { style: "color: var(--text-muted); text-align: center; margin-top: 20px;" }
+		});
+		
+		// Auto-focus and select all text in input
+		setTimeout(() => {
+			this.inputEl.focus();
+			this.inputEl.select();
+		}, 0);
+		
+		this.inputEl.addEventListener("keydown", (e) => {
 			if (e.key === "Enter") {
-				this.onSubmit(inputEl.value);
-				this.close();
+				this.performSearch(this.inputEl.value);
 			}
 		});
 
-		const submitBtn = contentEl.createEl("button", { text: "Search" });
-		submitBtn.addEventListener("click", () => {
-			this.onSubmit(inputEl.value);
-			this.close();
+		searchBtn.addEventListener("click", () => {
+			this.performSearch(this.inputEl.value);
 		});
+		
+		// Handle word wrap toggle
+		wrapToggle.addEventListener("change", () => {
+			this.wordWrap = wrapToggle.checked;
+			const pre = this.resultsContainer.querySelector("pre");
+			if (pre) {
+				pre.style.whiteSpace = this.wordWrap ? "pre-wrap" : "pre";
+				pre.style.wordBreak = this.wordWrap ? "break-word" : "normal";
+				pre.style.overflowX = this.wordWrap ? "hidden" : "auto";
+			}
+		});
+		
+		// Auto-search if default reference is provided
+		if (this.defaultReference && this.defaultReference.trim()) {
+			this.performSearch(this.defaultReference);
+		}
+	}
+	
+	private async performSearch(reference: string) {
+		if (!reference || !reference.trim()) {
+			new Notice("Please enter a reference");
+			return;
+		}
+		
+		if (!this.plugin.db) {
+			new Notice("Database not loaded.");
+			return;
+		}
+		
+		this.resultsContainer.empty();
+		this.resultsContainer.createEl("p", { 
+			text: "Searching...",
+			attr: { style: "color: var(--text-muted); text-align: center; margin-top: 20px;" }
+		});
+		
+		try {
+			const stmt = this.plugin.db.prepare("SELECT content, ref_order FROM ldss WHERE reference = :ref");
+			stmt.bind({ ":ref": reference.trim() });
+			
+			if (stmt.step()) {
+				const row = stmt.get();
+				const content = row[0] as string;
+				const refOrder = row[1] as number;
+				stmt.free();
+				
+				this.currentReference = reference.trim();
+				this.currentRefOrder = refOrder;
+				this.currentContent = content;
+				
+				this.displayResults();
+				this.updateNavButtons();
+			} else {
+				stmt.free();
+				this.resultsContainer.empty();
+				this.resultsContainer.createEl("p", { 
+					text: `No results found for reference: ${reference}`,
+					attr: { style: "color: var(--text-muted); text-align: center; margin-top: 20px;" }
+				});
+				this.currentRefOrder = null;
+				this.updateNavButtons();
+			}
+		} catch (err) {
+			console.error("Scripture search error:", err);
+			new Notice("Error searching for reference.");
+			this.resultsContainer.empty();
+			this.resultsContainer.createEl("p", { 
+				text: `Error: ${err.message}`,
+				attr: { style: "color: var(--text-error); text-align: center; margin-top: 20px;" }
+			});
+		}
+	}
+	
+	private displayResults() {
+		this.resultsContainer.empty();
+		
+		if (!this.currentContent) return;
+		
+		const pre = this.resultsContainer.createEl("pre", { text: `Reference: ${this.currentReference}\n\n${this.currentContent}` });
+		pre.style.overflowX = this.wordWrap ? "hidden" : "auto";
+		pre.style.whiteSpace = this.wordWrap ? "pre-wrap" : "pre";
+		pre.style.wordBreak = this.wordWrap ? "break-word" : "normal";
+	}
+	
+	private async navigate(direction: number) {
+		if (this.currentRefOrder === null || !this.plugin.db) return;
+		
+		const newRefOrder = this.currentRefOrder + direction;
+		
+		try {
+			const stmt = this.plugin.db.prepare("SELECT reference, content, ref_order FROM ldss WHERE ref_order = :order");
+			stmt.bind({ ":order": newRefOrder });
+			
+			if (stmt.step()) {
+				const row = stmt.get();
+				const reference = row[0] as string;
+				const content = row[1] as string;
+				const refOrder = row[2] as number;
+				stmt.free();
+				
+				this.currentReference = reference;
+				this.currentRefOrder = refOrder;
+				this.currentContent = content;
+				this.inputEl.value = reference;
+				
+				this.displayResults();
+				this.updateNavButtons();
+			} else {
+				stmt.free();
+				// Reached the end/beginning
+				this.updateNavButtons();
+			}
+		} catch (err) {
+			console.error("Navigation error:", err);
+			new Notice("Error navigating.");
+		}
+	}
+	
+	private updateNavButtons() {
+		if (this.currentRefOrder === null || !this.plugin.db) {
+			this.prevBtn.disabled = true;
+			this.nextBtn.disabled = true;
+			return;
+		}
+		
+		try {
+			// Check if previous exists
+			const prevStmt = this.plugin.db.prepare("SELECT 1 FROM ldss WHERE ref_order = :order");
+			prevStmt.bind({ ":order": this.currentRefOrder - 1 });
+			this.prevBtn.disabled = !prevStmt.step();
+			prevStmt.free();
+			
+			// Check if next exists
+			const nextStmt = this.plugin.db.prepare("SELECT 1 FROM ldss WHERE ref_order = :order");
+			nextStmt.bind({ ":order": this.currentRefOrder + 1 });
+			this.nextBtn.disabled = !nextStmt.step();
+			nextStmt.free();
+		} catch (err) {
+			console.error("Error updating nav buttons:", err);
+		}
 	}
 
 	onClose() {
