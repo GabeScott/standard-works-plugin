@@ -863,10 +863,15 @@ export default class StandardWorksPlugin extends Plugin {
 				// Remove any leading or trailing whitespace
 				
 				new ReferenceSearchModal(this.app, this, defaultReference).open();
-		}
-	});
+			}
+		});
 
-	this.addCommand({
+		this.addCommand({
+			id: "search-scripture-text",
+			name: "Search Scripture Text",
+			callback: () => {
+				new ScriptureSearchModal(this.app, this).open();
+			}
 		});
 
 		this.addSettingTab(new StandardWorksPluginSettingTab(this.app, this));

@@ -3097,7 +3097,13 @@ var StandardWorksPlugin = class extends import_obsidian.Plugin {
         new ReferenceSearchModal(this.app, this, defaultReference).open();
       }
     });
-    this.addCommand({});
+    this.addCommand({
+      id: "search-scripture-text",
+      name: "Search Scripture Text",
+      callback: () => {
+        new ScriptureSearchModal(this.app, this).open();
+      }
+    });
     this.addSettingTab(new StandardWorksPluginSettingTab(this.app, this));
     this.activateView();
   }
@@ -3824,6 +3830,360 @@ var ScriptureReferenceSuggestModal = class extends import_obsidian.SuggestModal 
   }
   onChooseSuggestion(ref) {
     this.onChoose(ref);
+  }
+};
+var ScriptureSearchModal = class extends import_obsidian.Modal {
+  constructor(app, plugin) {
+    super(app);
+    this.searchResults = [];
+    this.currentPage = 0;
+    this.resultsPerPage = 50;
+    this.searchTerm = "";
+    this.isRegex = false;
+    this.selectedIndex = -1;
+    this.activeContextMenu = null;
+    this.boundDismissMenu = null;
+    this.plugin = plugin;
+  }
+  onOpen() {
+    const { contentEl } = this;
+    if (this.plugin.lastSearchResults.length > 0) {
+      this.searchResults = this.plugin.lastSearchResults;
+      this.searchTerm = this.plugin.lastSearchTerm;
+      this.currentPage = this.plugin.lastSearchPage;
+      this.isRegex = this.plugin.lastSearchIsRegex;
+    }
+    this.modalEl.addClass("scripture-search-modal");
+    const headerRow = contentEl.createEl("div", { cls: "search-header-row" });
+    headerRow.createEl("h2", { text: "Search Scriptures" });
+    const regexLabel = headerRow.createEl("label", { cls: "search-regex-toggle" });
+    this.regexCheckbox = regexLabel.createEl("input", { attr: { type: "checkbox" } });
+    if (this.isRegex)
+      this.regexCheckbox.checked = true;
+    regexLabel.appendText(" Regex/Wildcard");
+    const searchContainer = contentEl.createEl("div", { cls: "search-input-container" });
+    this.inputEl = searchContainer.createEl("input", {
+      type: "text",
+      attr: {
+        placeholder: "Enter search phrase (use * for wildcard, or regex)...",
+        value: this.searchTerm
+      }
+    });
+    const searchBtn = searchContainer.createEl("button", { text: "Search" });
+    const checkboxContainer = contentEl.createEl("div", { cls: "scripture-works-checkboxes" });
+    this.otCheckbox = this.createCheckbox(checkboxContainer, "Old Testament", this.plugin.lastSelectedWorks.ot);
+    this.ntCheckbox = this.createCheckbox(checkboxContainer, "New Testament", this.plugin.lastSelectedWorks.nt);
+    this.bomCheckbox = this.createCheckbox(checkboxContainer, "Book of Mormon", this.plugin.lastSelectedWorks.bom);
+    this.dacCheckbox = this.createCheckbox(checkboxContainer, "D&C", this.plugin.lastSelectedWorks.dac);
+    this.pogpCheckbox = this.createCheckbox(checkboxContainer, "Pearl of Great Price", this.plugin.lastSelectedWorks.pogp);
+    this.resultsContainer = contentEl.createEl("div", { cls: "search-results-container" });
+    this.paginationContainer = contentEl.createEl("div", { cls: "pagination-container" });
+    setTimeout(() => {
+      this.inputEl.focus();
+      this.inputEl.select();
+    }, 0);
+    this.inputEl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && e.altKey && this.selectedIndex >= 0) {
+        e.preventDefault();
+        this.insertSelectedResultLink();
+      } else if (e.key === "Enter" && this.selectedIndex === -1) {
+        this.performSearch(this.inputEl.value);
+      } else if (e.key === "Enter" && this.selectedIndex >= 0) {
+        this.openSelectedResult();
+      } else if (e.key === "ArrowDown") {
+        e.preventDefault();
+        this.moveSelection(1);
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        this.moveSelection(-1);
+      }
+    });
+    searchBtn.addEventListener("click", () => {
+      this.performSearch(this.inputEl.value);
+    });
+    if (this.searchResults.length > 0) {
+      this.displayResults();
+    } else {
+      this.resultsContainer.createEl("p", {
+        text: "Enter a search phrase and click Search to find verses.",
+        attr: { style: "color: var(--text-muted); text-align: center; margin-top: 20px;" }
+      });
+    }
+  }
+  createCheckbox(container, label, checked) {
+    const labelEl = container.createEl("label");
+    const checkbox = labelEl.createEl("input", {
+      attr: { type: "checkbox", checked }
+    });
+    labelEl.appendText(label);
+    return checkbox;
+  }
+  async performSearch(searchPhrase) {
+    if (!searchPhrase || !searchPhrase.trim()) {
+      new import_obsidian.Notice("Please enter a search phrase");
+      return;
+    }
+    this.searchTerm = searchPhrase.trim();
+    this.isRegex = this.regexCheckbox.checked;
+    this.currentPage = 0;
+    this.selectedIndex = -1;
+    this.resultsContainer.empty();
+    this.resultsContainer.createEl("p", {
+      text: "Searching...",
+      attr: { style: "color: var(--text-muted); text-align: center; margin-top: 20px;" }
+    });
+    const selectedWorks = [];
+    if (this.otCheckbox.checked)
+      selectedWorks.push("ot.json");
+    if (this.ntCheckbox.checked)
+      selectedWorks.push("nt.json");
+    if (this.bomCheckbox.checked)
+      selectedWorks.push("bom.json");
+    if (this.dacCheckbox.checked)
+      selectedWorks.push("dac.json");
+    if (this.pogpCheckbox.checked)
+      selectedWorks.push("pogp.json");
+    if (selectedWorks.length === 0) {
+      this.resultsContainer.empty();
+      this.resultsContainer.createEl("p", {
+        text: "Please select at least one work to search.",
+        attr: { style: "color: var(--text-error); text-align: center; margin-top: 20px;" }
+      });
+      return;
+    }
+    this.searchResults = await this.plugin.searchScriptures(this.searchTerm, selectedWorks, this.isRegex);
+    this.plugin.lastSearchTerm = this.searchTerm;
+    this.plugin.lastSearchResults = this.searchResults;
+    this.plugin.lastSearchIsRegex = this.isRegex;
+    this.plugin.lastSelectedWorks = {
+      ot: this.otCheckbox.checked,
+      nt: this.ntCheckbox.checked,
+      bom: this.bomCheckbox.checked,
+      dac: this.dacCheckbox.checked,
+      pogp: this.pogpCheckbox.checked
+    };
+    this.displayResults();
+  }
+  displayResults() {
+    this.resultsContainer.empty();
+    if (this.searchResults.length === 0) {
+      this.resultsContainer.createEl("p", {
+        text: `No results found for "${this.searchTerm}".`,
+        attr: { style: "color: var(--text-muted); text-align: center; margin-top: 20px;" }
+      });
+      this.paginationContainer.empty();
+      return;
+    }
+    this.resultsContainer.createEl("div", {
+      text: `Found ${this.searchResults.length} result${this.searchResults.length === 1 ? "" : "s"}`,
+      cls: "search-result-count"
+    });
+    const startIdx = this.currentPage * this.resultsPerPage;
+    const endIdx = Math.min(startIdx + this.resultsPerPage, this.searchResults.length);
+    const pageResults = this.searchResults.slice(startIdx, endIdx);
+    for (let i = 0; i < pageResults.length; i++) {
+      const result = pageResults[i];
+      const globalIndex = startIdx + i;
+      const resultEl = this.resultsContainer.createEl("div", { cls: "search-result-item" });
+      resultEl.dataset.index = String(globalIndex);
+      if (globalIndex === this.selectedIndex) {
+        resultEl.addClass("search-result-selected");
+      }
+      const refLink = resultEl.createEl("a", {
+        text: `${result.book} ${result.chapter}:${result.verse}`,
+        cls: "search-result-reference"
+      });
+      resultEl.addEventListener("click", (e) => {
+        e.preventDefault();
+        this.openResult(result);
+      });
+      resultEl.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        this.showResultContextMenu(e, result);
+      });
+      const textEl = resultEl.createEl("div", { cls: "search-result-text" });
+      textEl.innerHTML = this.highlightText(result.text, this.searchTerm);
+    }
+    this.updatePagination();
+  }
+  openResult(result) {
+    const filename = `${result.book} ${result.chapter}.${result.verse}`;
+    const files = this.app.vault.getFiles();
+    let targetFile = null;
+    for (const file of files) {
+      if (file.name === `${filename}.md`) {
+        targetFile = file;
+        break;
+      }
+    }
+    if (targetFile) {
+      this.app.workspace.getLeaf("tab").openFile(targetFile);
+      this.close();
+    } else {
+      new import_obsidian.Notice(`Verse file not found: ${filename}`);
+    }
+  }
+  openSelectedResult() {
+    if (this.selectedIndex < 0 || this.selectedIndex >= this.searchResults.length)
+      return;
+    this.openResult(this.searchResults[this.selectedIndex]);
+  }
+  insertSelectedResultLink() {
+    if (this.selectedIndex < 0 || this.selectedIndex >= this.searchResults.length)
+      return;
+    this.insertResultLink(this.searchResults[this.selectedIndex]);
+  }
+  getResultLink(result) {
+    const filename = `${result.book} ${result.chapter}.${result.verse}`;
+    const display = `${result.book} ${result.chapter}:${result.verse}`;
+    return `[[${filename}|${display}]]`;
+  }
+  insertResultLink(result) {
+    const link = this.getResultLink(result);
+    const activeView = this.app.workspace.getActiveViewOfType(import_obsidian.MarkdownView);
+    if (activeView) {
+      const editor = activeView.editor;
+      editor.replaceSelection(link);
+      new import_obsidian.Notice("Link inserted");
+      this.close();
+    } else {
+      navigator.clipboard.writeText(link);
+      new import_obsidian.Notice("No active editor \u2014 link copied to clipboard");
+    }
+  }
+  showResultContextMenu(e, result) {
+    this.dismissResultContextMenu();
+    const menu = document.createElement("div");
+    menu.className = "verse-context-menu";
+    menu.style.left = `${e.clientX}px`;
+    menu.style.top = `${e.clientY}px`;
+    menu.style.zIndex = "var(--layer-notice)";
+    const ref = `${result.book} ${result.chapter}:${result.verse}`;
+    const insertLinkItem = menu.createDiv({ cls: "verse-context-menu-item", text: "Insert link" });
+    insertLinkItem.addEventListener("click", () => {
+      this.insertResultLink(result);
+      this.dismissResultContextMenu();
+    });
+    const copyLinkItem = menu.createDiv({ cls: "verse-context-menu-item", text: "Copy link" });
+    copyLinkItem.addEventListener("click", () => {
+      navigator.clipboard.writeText(this.getResultLink(result));
+      new import_obsidian.Notice("Link copied");
+      this.dismissResultContextMenu();
+    });
+    const copyRefItem = menu.createDiv({ cls: "verse-context-menu-item", text: "Copy reference" });
+    copyRefItem.addEventListener("click", () => {
+      navigator.clipboard.writeText(ref);
+      new import_obsidian.Notice("Reference copied");
+      this.dismissResultContextMenu();
+    });
+    const copyTextItem = menu.createDiv({ cls: "verse-context-menu-item", text: "Copy verse text" });
+    copyTextItem.addEventListener("click", () => {
+      navigator.clipboard.writeText(result.text);
+      new import_obsidian.Notice("Verse text copied");
+      this.dismissResultContextMenu();
+    });
+    const openNoteItem = menu.createDiv({ cls: "verse-context-menu-item", text: "Open note" });
+    openNoteItem.addEventListener("click", () => {
+      this.openResult(result);
+      this.dismissResultContextMenu();
+    });
+    document.body.appendChild(menu);
+    this.activeContextMenu = menu;
+    this.boundDismissMenu = () => this.dismissResultContextMenu();
+    setTimeout(() => {
+      document.addEventListener("click", this.boundDismissMenu);
+      document.addEventListener("contextmenu", this.boundDismissMenu);
+    }, 0);
+  }
+  dismissResultContextMenu() {
+    if (this.activeContextMenu) {
+      this.activeContextMenu.remove();
+      this.activeContextMenu = null;
+    }
+    if (this.boundDismissMenu) {
+      document.removeEventListener("click", this.boundDismissMenu);
+      document.removeEventListener("contextmenu", this.boundDismissMenu);
+      this.boundDismissMenu = null;
+    }
+  }
+  moveSelection(delta) {
+    const startIdx = this.currentPage * this.resultsPerPage;
+    const endIdx = Math.min(startIdx + this.resultsPerPage, this.searchResults.length);
+    if (endIdx <= startIdx)
+      return;
+    const prev = this.resultsContainer.querySelector(".search-result-selected");
+    if (prev)
+      prev.removeClass("search-result-selected");
+    if (this.selectedIndex === -1) {
+      this.selectedIndex = delta > 0 ? startIdx : endIdx - 1;
+    } else {
+      this.selectedIndex += delta;
+      if (this.selectedIndex < startIdx)
+        this.selectedIndex = startIdx;
+      if (this.selectedIndex >= endIdx)
+        this.selectedIndex = endIdx - 1;
+    }
+    const el = this.resultsContainer.querySelector(`[data-index="${this.selectedIndex}"]`);
+    if (el) {
+      el.addClass("search-result-selected");
+      el.scrollIntoView({ block: "nearest" });
+    }
+  }
+  highlightText(text, searchTerm) {
+    const escapeHtml = (str) => {
+      const div = document.createElement("div");
+      div.textContent = str;
+      return div.innerHTML;
+    };
+    const escapedText = escapeHtml(text);
+    let regex;
+    if (this.isRegex) {
+      try {
+        let pattern = searchTerm;
+        pattern = pattern.replace(/(?<!\.)\*/g, ".*");
+        pattern = pattern.replace(/(?<!\\)\?/g, ".");
+        regex = new RegExp(`(${pattern})`, "gi");
+      } catch {
+        return escapedText;
+      }
+    } else {
+      regex = new RegExp(`(${searchTerm.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "gi");
+    }
+    return escapedText.replace(regex, '<mark style="background-color: var(--text-highlight-bg); color: var(--text-normal); padding: 2px 0;">$1</mark>');
+  }
+  updatePagination() {
+    this.paginationContainer.empty();
+    const totalPages = Math.ceil(this.searchResults.length / this.resultsPerPage);
+    if (totalPages <= 1)
+      return;
+    const prevBtn = this.paginationContainer.createEl("button", { text: "Previous" });
+    prevBtn.disabled = this.currentPage === 0;
+    prevBtn.addEventListener("click", () => {
+      if (this.currentPage > 0) {
+        this.currentPage--;
+        this.plugin.lastSearchPage = this.currentPage;
+        this.displayResults();
+        this.resultsContainer.scrollTop = 0;
+      }
+    });
+    const pageInfo = this.paginationContainer.createEl("span", {
+      text: `Page ${this.currentPage + 1} of ${totalPages}`
+    });
+    const nextBtn = this.paginationContainer.createEl("button", { text: "Next" });
+    nextBtn.disabled = this.currentPage >= totalPages - 1;
+    nextBtn.addEventListener("click", () => {
+      if (this.currentPage < totalPages - 1) {
+        this.currentPage++;
+        this.plugin.lastSearchPage = this.currentPage;
+        this.displayResults();
+        this.resultsContainer.scrollTop = 0;
+      }
+    });
+  }
+  onClose() {
+    this.dismissResultContextMenu();
+    this.contentEl.empty();
   }
 };
 var StandardWorksPluginSettingTab = class extends import_obsidian.PluginSettingTab {
