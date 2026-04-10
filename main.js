@@ -2363,7 +2363,8 @@ module.exports = __toCommonJS(main_exports);
 var import_obsidian = require("obsidian");
 var import_sql = __toESM(require_sql_wasm());
 var DEFAULT_SETTINGS = {
-  orderBacklinks: true
+  orderBacklinks: true,
+  translationLanguages: ["eng"]
 };
 var BOOKS_BY_FILE = {
   "ot.json": {
@@ -2476,6 +2477,24 @@ for (const [dataFile, books] of Object.entries(BOOKS_BY_FILE)) {
   }
 }
 var VIEW_TYPE_SCRIPTURE_CONTEXT = "scripture-context-view";
+var VIEW_TYPE_TRANSLATION = "translation-view";
+var LANGUAGES = {
+  "eng": "English",
+  "por": "Portugu\xEAs",
+  "ita": "Italiano",
+  "fra": "Fran\xE7ais",
+  "spa": "Espa\xF1ol",
+  "rus": "\u0420\u0443\u0441\u0441\u043A\u0438\u0439",
+  "kor": "\uD55C\uAD6D\uC5B4",
+  "jpn": "\u65E5\u672C\u8A9E",
+  "zho": "\u4E2D\u6587",
+  "deu": "Deutsch"
+};
+function getTranslationFile(baseFile, lang) {
+  if (lang === "eng")
+    return baseFile;
+  return baseFile.replace(".json", `_${lang}.json`);
+}
 var ScriptureContextView = class extends import_obsidian.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
@@ -2988,6 +3007,134 @@ var ScriptureContextView = class extends import_obsidian.ItemView {
       clearTimeout(this.updateDebounceTimer);
   }
 };
+var TranslationView = class extends import_obsidian.ItemView {
+  constructor(leaf, plugin) {
+    super(leaf);
+    this.langPickerVisible = false;
+    this.currentBook = null;
+    this.currentChapter = null;
+    this.currentVerse = null;
+    this.currentFile = null;
+    this.plugin = plugin;
+  }
+  getViewType() {
+    return VIEW_TYPE_TRANSLATION;
+  }
+  getDisplayText() {
+    return "Scripture Translations";
+  }
+  getIcon() {
+    return "languages";
+  }
+  async onOpen() {
+    const container = this.containerEl.children[1];
+    container.empty();
+    const wrapper = container.createDiv({ cls: "translation-wrapper" });
+    const headerEl = wrapper.createDiv({ cls: "translation-header" });
+    headerEl.createEl("h4", { text: "Translations" });
+    const toggleBtn = headerEl.createEl("button", { cls: "translation-lang-toggle", text: "\u2699 Languages" });
+    this.langPickerEl = wrapper.createDiv({ cls: "translation-lang-picker hidden" });
+    this.buildLangPicker();
+    toggleBtn.addEventListener("click", () => {
+      this.langPickerVisible = !this.langPickerVisible;
+      if (this.langPickerVisible) {
+        this.langPickerEl.removeClass("hidden");
+      } else {
+        this.langPickerEl.addClass("hidden");
+      }
+    });
+    this.refLabel = wrapper.createDiv({ cls: "translation-ref-label", text: "\u2014" });
+    this.contentContainer = wrapper.createDiv({ cls: "translation-content" });
+    this.registerEvent(
+      this.app.workspace.on("active-leaf-change", () => {
+        this.updateFromActiveFile();
+      })
+    );
+    setTimeout(() => this.updateFromActiveFile(), 0);
+  }
+  buildLangPicker() {
+    this.langPickerEl.empty();
+    for (const [code, name] of Object.entries(LANGUAGES)) {
+      const label = this.langPickerEl.createEl("label", { cls: "translation-lang-item" });
+      const cb = label.createEl("input", { attr: { type: "checkbox" } });
+      cb.checked = this.plugin.settings.translationLanguages.includes(code);
+      label.createSpan({ text: name });
+      cb.addEventListener("change", async () => {
+        if (cb.checked) {
+          if (!this.plugin.settings.translationLanguages.includes(code)) {
+            this.plugin.settings.translationLanguages.push(code);
+          }
+        } else {
+          this.plugin.settings.translationLanguages = this.plugin.settings.translationLanguages.filter((l) => l !== code);
+        }
+        await this.plugin.saveSettings();
+        await this.renderTranslations();
+      });
+    }
+  }
+  refreshLangPicker() {
+    this.buildLangPicker();
+  }
+  async updateFromActiveFile() {
+    const activeFile = this.app.workspace.getActiveFile();
+    if (!activeFile)
+      return;
+    const filePath = activeFile.path;
+    if (filePath === this.currentFile)
+      return;
+    this.currentFile = filePath;
+    const match = activeFile.basename.match(/^(.+?)\s+(\d+)\.(\d+)$/);
+    if (!match)
+      return;
+    this.currentBook = match[1];
+    this.currentChapter = match[2];
+    this.currentVerse = match[3];
+    await this.renderTranslations();
+  }
+  async renderTranslations() {
+    if (!this.contentContainer || !this.currentBook || !this.currentChapter || !this.currentVerse)
+      return;
+    this.contentContainer.empty();
+    const langs = this.plugin.settings.translationLanguages;
+    if (langs.length === 0) {
+      this.contentContainer.createEl("p", {
+        text: "No languages selected. Click \u2699 Languages to choose translations.",
+        attr: { style: "color: var(--text-muted); padding: 10px;" }
+      });
+      return;
+    }
+    this.refLabel.setText(`${this.currentBook} ${this.currentChapter}:${this.currentVerse}`);
+    const baseFile = BOOK_TO_FILE[this.currentBook];
+    if (!baseFile) {
+      this.contentContainer.createEl("p", { text: `Unknown book: ${this.currentBook}` });
+      return;
+    }
+    for (const lang of langs) {
+      const langBlock = this.contentContainer.createDiv({ cls: "translation-lang-block" });
+      const langHeader = langBlock.createDiv({ cls: "translation-lang-header" });
+      langHeader.createEl("span", { text: LANGUAGES[lang] || lang });
+      const verseEl = langBlock.createDiv({ cls: "translation-verse-text", text: "Loading\u2026" });
+      const translationFile = getTranslationFile(baseFile, lang);
+      try {
+        await this.plugin.ensureTranslationFile(translationFile);
+        const data = await this.plugin.getScriptureData(translationFile);
+        const chData = data[this.currentBook]?.[this.currentChapter];
+        const verseText = chData?.[this.currentVerse];
+        if (verseText) {
+          verseEl.setText(verseText);
+        } else {
+          verseEl.setText("\u2014");
+          verseEl.style.color = "var(--text-muted)";
+        }
+      } catch (err) {
+        verseEl.setText(`Failed to load: ${err.message}`);
+        verseEl.style.color = "var(--text-error)";
+      }
+    }
+  }
+  async onClose() {
+  }
+};
 var StandardWorksPlugin = class extends import_obsidian.Plugin {
   constructor() {
     super(...arguments);
@@ -3017,11 +3164,22 @@ var StandardWorksPlugin = class extends import_obsidian.Plugin {
       VIEW_TYPE_SCRIPTURE_CONTEXT,
       (leaf) => new ScriptureContextView(leaf, this)
     );
+    this.registerView(
+      VIEW_TYPE_TRANSLATION,
+      (leaf) => new TranslationView(leaf, this)
+    );
     this.addCommand({
       id: "open-scripture-context-view",
       name: "Open Scripture Context View",
       callback: () => {
         this.activateView();
+      }
+    });
+    this.addCommand({
+      id: "open-translation-view",
+      name: "Open Scripture Translations View",
+      callback: () => {
+        this.activateTranslationView();
       }
     });
     this.observer = new MutationObserver((mutations) => {
@@ -3244,12 +3402,58 @@ ${content}`).open();
     }
     workspace.revealLeaf(leaf);
   }
+  async activateTranslationView() {
+    const { workspace } = this.app;
+    let leaf = workspace.getLeavesOfType(VIEW_TYPE_TRANSLATION)[0];
+    if (!leaf) {
+      leaf = workspace.getRightLeaf(false);
+      await leaf.setViewState({
+        type: VIEW_TYPE_TRANSLATION,
+        active: true
+      });
+    }
+    workspace.revealLeaf(leaf);
+  }
+  async ensureTranslationFile(translationFile) {
+    if (!translationFile.includes("_"))
+      return;
+    if (this.scriptureDataCache.has(translationFile))
+      return;
+    const adapter = this.app.vault.adapter;
+    const basePath = this.manifest.dir;
+    const filePath = `${basePath}/data/${translationFile}`;
+    let exists = false;
+    try {
+      const stat = await adapter.stat(filePath);
+      exists = stat !== null;
+    } catch {
+      exists = false;
+    }
+    if (!exists) {
+      const url = `https://raw.githubusercontent.com/GabeScott/standard-works-plugin/main/data/${translationFile}`;
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status} fetching ${translationFile}`);
+      }
+      const arrayBuffer = await response.arrayBuffer();
+      await adapter.writeBinary(filePath, arrayBuffer);
+    }
+  }
+  refreshTranslationView() {
+    const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_TRANSLATION);
+    for (const leaf of leaves) {
+      const view = leaf.view;
+      view.refreshLangPicker();
+      view.renderTranslations();
+    }
+  }
   onunload() {
     this.db?.close();
     this.db = null;
     this.observer.disconnect();
     this.scriptureDataCache.clear();
     this.app.workspace.detachLeavesOfType(VIEW_TYPE_SCRIPTURE_CONTEXT);
+    this.app.workspace.detachLeavesOfType(VIEW_TYPE_TRANSLATION);
   }
   async loadSqlJs() {
     this.SQL = await (0, import_sql.default)({
@@ -4199,5 +4403,28 @@ var StandardWorksPluginSettingTab = class extends import_obsidian.PluginSettingT
       this.plugin.settings.orderBacklinks = value;
       await this.plugin.saveSettings();
     }));
+    containerEl.createEl("h3", { text: "Translation Languages" });
+    containerEl.createEl("p", {
+      text: "Select which languages to display in the Translations view.",
+      attr: { style: "color: var(--text-muted); margin-bottom: 10px;" }
+    });
+    const langGrid = containerEl.createDiv({ cls: "translation-settings-grid" });
+    for (const [code, name] of Object.entries(LANGUAGES)) {
+      const label = langGrid.createEl("label", { cls: "translation-settings-item" });
+      const cb = label.createEl("input", { attr: { type: "checkbox" } });
+      cb.checked = this.plugin.settings.translationLanguages.includes(code);
+      label.createSpan({ text: `${name} (${code})` });
+      cb.addEventListener("change", async () => {
+        if (cb.checked) {
+          if (!this.plugin.settings.translationLanguages.includes(code)) {
+            this.plugin.settings.translationLanguages.push(code);
+          }
+        } else {
+          this.plugin.settings.translationLanguages = this.plugin.settings.translationLanguages.filter((l) => l !== code);
+        }
+        await this.plugin.saveSettings();
+        this.plugin.refreshTranslationView();
+      });
+    }
   }
 };
