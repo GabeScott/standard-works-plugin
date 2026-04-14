@@ -2509,6 +2509,7 @@ var ScriptureContextView = class extends import_obsidian.ItemView {
     this.boundDismissMenu = null;
     this.currentCommentaryRef = null;
     this.currentCommentaryRefOrder = null;
+    this.wasActive = false;
     this.plugin = plugin;
   }
   getViewType() {
@@ -2581,7 +2582,16 @@ var ScriptureContextView = class extends import_obsidian.ItemView {
     this.commentaryPrevBtn.addEventListener("click", () => this.navigateCommentary(-1));
     this.commentaryNextBtn.addEventListener("click", () => this.navigateCommentary(1));
     this.registerEvent(
-      this.app.workspace.on("active-leaf-change", () => {
+      this.app.workspace.on("active-leaf-change", (leaf) => {
+        const isNowActive = leaf === this.leaf;
+        if (isNowActive && !this.wasActive) {
+          if (this.currentVerse) {
+            setTimeout(() => {
+              this.scrollToActiveVerse();
+            }, 100);
+          }
+        }
+        this.wasActive = isNowActive;
         this.updateContext();
       })
     );
@@ -2717,13 +2727,12 @@ var ScriptureContextView = class extends import_obsidian.ItemView {
       }
       const versesContainer = this.contentContainer.createDiv({ cls: "chapter-verses" });
       const verseNumbers = Object.keys(chapterData).filter((k) => k !== "heading").sort((a, b) => parseInt(a) - parseInt(b));
+      let activeVerseEl = null;
       for (const verseNum of verseNumbers) {
         const isActive = verseNum === verse;
         const verseEl = versesContainer.createDiv({ cls: verseNum === verse ? "verse-item active" : "verse-item" });
         if (verseNum === verse) {
-          setTimeout(() => {
-            verseEl.scrollIntoView({ behavior: "smooth", block: "center" });
-          }, 500);
+          activeVerseEl = verseEl;
         }
         verseEl.createEl("strong", { text: `${verseNum}. ` });
         verseEl.createSpan({ text: chapterData[verseNum] });
@@ -2736,6 +2745,23 @@ var ScriptureContextView = class extends import_obsidian.ItemView {
         });
       }
       await this.loadCommentaryForVerse(bookName, chapter, verse);
+      if (activeVerseEl) {
+        const scrollContainer = this.contentContainer;
+        setTimeout(() => {
+          requestAnimationFrame(() => {
+            if (!activeVerseEl || !scrollContainer)
+              return;
+            const containerRect = scrollContainer.getBoundingClientRect();
+            const targetRect = activeVerseEl.getBoundingClientRect();
+            const relativeTop = targetRect.top - containerRect.top;
+            const scrollTarget = scrollContainer.scrollTop + relativeTop - containerRect.height / 2 + targetRect.height / 2;
+            scrollContainer.scrollTo({
+              top: scrollTarget,
+              behavior: "smooth"
+            });
+          });
+        }, 150);
+      }
     } catch (error) {
       console.error("Error loading scripture context:", error);
       this.contentContainer.createEl("p", { text: `Error loading context: ${error.message}` });
@@ -2864,6 +2890,39 @@ var ScriptureContextView = class extends import_obsidian.ItemView {
         targetVerse = verseEl;
       } else {
         verseEl.classList.remove("active");
+      }
+    });
+    if (targetVerse) {
+      const scrollContainer = this.contentContainer;
+      requestAnimationFrame(() => {
+        if (!targetVerse || !scrollContainer)
+          return;
+        const containerRect = scrollContainer.getBoundingClientRect();
+        const targetRect = targetVerse.getBoundingClientRect();
+        const relativeTop = targetRect.top - containerRect.top;
+        const scrollTarget = scrollContainer.scrollTop + relativeTop - containerRect.height / 2 + targetRect.height / 2;
+        scrollContainer.scrollTo({
+          top: scrollTarget,
+          behavior: "smooth"
+        });
+      });
+    }
+  }
+  scrollToActiveVerse() {
+    if (!this.currentVerse || !this.contentContainer)
+      return;
+    const versesContainer = this.contentContainer.querySelector(".chapter-verses");
+    if (!versesContainer)
+      return;
+    const verseItems = versesContainer.querySelectorAll(".verse-item");
+    let targetVerse = null;
+    verseItems.forEach((verseEl) => {
+      const verseNumEl = verseEl.querySelector("strong");
+      if (!verseNumEl)
+        return;
+      const verseNum = verseNumEl.textContent?.replace(".", "").trim();
+      if (verseNum === this.currentVerse) {
+        targetVerse = verseEl;
       }
     });
     if (targetVerse) {
@@ -3146,6 +3205,7 @@ var StandardWorksPlugin = class extends import_obsidian.Plugin {
     this.lastSearchResults = [];
     this.lastSearchPage = 0;
     this.lastSearchIsRegex = false;
+    this.lastScrollPosition = 0;
     this.lastSelectedWorks = {
       ot: true,
       nt: true,
@@ -3706,10 +3766,7 @@ ${content}`).open();
     let matchFn;
     if (useRegex) {
       try {
-        let pattern = searchTerm;
-        pattern = pattern.replace(/(?<!\.)\*/g, ".*");
-        pattern = pattern.replace(/(?<!\\)\?/g, ".");
-        const regex = new RegExp(pattern, "i");
+        const regex = new RegExp(searchTerm, "i");
         matchFn = (text) => regex.test(text);
       } catch (e) {
         new import_obsidian.Notice(`Invalid regex pattern: ${e.message}`);
@@ -4047,6 +4104,7 @@ var ScriptureSearchModal = class extends import_obsidian.Modal {
     this.selectedIndex = -1;
     this.activeContextMenu = null;
     this.boundDismissMenu = null;
+    this.scrollListenerAttached = false;
     this.plugin = plugin;
   }
   onOpen() {
@@ -4064,12 +4122,12 @@ var ScriptureSearchModal = class extends import_obsidian.Modal {
     this.regexCheckbox = regexLabel.createEl("input", { attr: { type: "checkbox" } });
     if (this.isRegex)
       this.regexCheckbox.checked = true;
-    regexLabel.appendText(" Regex/Wildcard");
+    regexLabel.appendText(" Use Regex");
     const searchContainer = contentEl.createEl("div", { cls: "search-input-container" });
     this.inputEl = searchContainer.createEl("input", {
       type: "text",
       attr: {
-        placeholder: "Enter search phrase (use * for wildcard, or regex)...",
+        placeholder: "Enter search phrase or regex pattern...",
         value: this.searchTerm
       }
     });
@@ -4081,6 +4139,7 @@ var ScriptureSearchModal = class extends import_obsidian.Modal {
     this.dacCheckbox = this.createCheckbox(checkboxContainer, "D&C", this.plugin.lastSelectedWorks.dac);
     this.pogpCheckbox = this.createCheckbox(checkboxContainer, "Pearl of Great Price", this.plugin.lastSelectedWorks.pogp);
     this.resultsContainer = contentEl.createEl("div", { cls: "search-results-container" });
+    this.attachScrollListener();
     this.paginationContainer = contentEl.createEl("div", { cls: "pagination-container" });
     setTimeout(() => {
       this.inputEl.focus();
@@ -4107,6 +4166,12 @@ var ScriptureSearchModal = class extends import_obsidian.Modal {
     });
     if (this.searchResults.length > 0) {
       this.displayResults();
+      const savedScrollPosition = this.plugin.lastScrollPosition;
+      setTimeout(() => {
+        requestAnimationFrame(() => {
+          this.resultsContainer.scrollTop = savedScrollPosition;
+        });
+      }, 100);
     } else {
       this.resultsContainer.createEl("p", {
         text: "Enter a search phrase and click Search to find verses.",
@@ -4114,11 +4179,20 @@ var ScriptureSearchModal = class extends import_obsidian.Modal {
       });
     }
   }
+  attachScrollListener() {
+    if (this.scrollListenerAttached)
+      return;
+    this.resultsContainer.addEventListener("scroll", () => {
+      this.plugin.lastScrollPosition = this.resultsContainer.scrollTop;
+    });
+    this.scrollListenerAttached = true;
+  }
   createCheckbox(container, label, checked) {
     const labelEl = container.createEl("label");
     const checkbox = labelEl.createEl("input", {
-      attr: { type: "checkbox", checked }
+      type: "checkbox"
     });
+    checkbox.checked = checked;
     labelEl.appendText(label);
     return checkbox;
   }
@@ -4131,6 +4205,7 @@ var ScriptureSearchModal = class extends import_obsidian.Modal {
     this.isRegex = this.regexCheckbox.checked;
     this.currentPage = 0;
     this.selectedIndex = -1;
+    this.plugin.lastScrollPosition = 0;
     this.resultsContainer.empty();
     this.resultsContainer.createEl("p", {
       text: "Searching...",
@@ -4167,6 +4242,12 @@ var ScriptureSearchModal = class extends import_obsidian.Modal {
       pogp: this.pogpCheckbox.checked
     };
     this.displayResults();
+    const savedScrollPosition = this.plugin.lastScrollPosition;
+    setTimeout(() => {
+      requestAnimationFrame(() => {
+        this.resultsContainer.scrollTop = savedScrollPosition;
+      });
+    }, 100);
   }
   displayResults() {
     this.resultsContainer.empty();
@@ -4341,20 +4422,35 @@ var ScriptureSearchModal = class extends import_obsidian.Modal {
       return div.innerHTML;
     };
     const escapedText = escapeHtml(text);
-    let regex;
     if (this.isRegex) {
+      const lookaheadMatches = searchTerm.matchAll(/\(\?=\.\*\\?b?([^)\\]+?)\\?b?\)/g);
+      const termsToHighlight = [];
+      for (const match of lookaheadMatches) {
+        if (match[1]) {
+          termsToHighlight.push(match[1]);
+        }
+      }
+      if (termsToHighlight.length > 0) {
+        let result = escapedText;
+        for (const term of termsToHighlight) {
+          try {
+            const highlightRegex = new RegExp(`(${term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "gi");
+            result = result.replace(highlightRegex, '<mark style="background-color: var(--text-highlight-bg); color: var(--text-normal); padding: 2px 0;">$1</mark>');
+          } catch {
+          }
+        }
+        return result;
+      }
       try {
-        let pattern = searchTerm;
-        pattern = pattern.replace(/(?<!\.)\*/g, ".*");
-        pattern = pattern.replace(/(?<!\\)\?/g, ".");
-        regex = new RegExp(`(${pattern})`, "gi");
+        const regex = new RegExp(`(${searchTerm})`, "gi");
+        return escapedText.replace(regex, '<mark style="background-color: var(--text-highlight-bg); color: var(--text-normal); padding: 2px 0;">$1</mark>');
       } catch {
         return escapedText;
       }
     } else {
-      regex = new RegExp(`(${searchTerm.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "gi");
+      const regex = new RegExp(`(${searchTerm.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "gi");
+      return escapedText.replace(regex, '<mark style="background-color: var(--text-highlight-bg); color: var(--text-normal); padding: 2px 0;">$1</mark>');
     }
-    return escapedText.replace(regex, '<mark style="background-color: var(--text-highlight-bg); color: var(--text-normal); padding: 2px 0;">$1</mark>');
   }
   updatePagination() {
     this.paginationContainer.empty();
@@ -4367,6 +4463,7 @@ var ScriptureSearchModal = class extends import_obsidian.Modal {
       if (this.currentPage > 0) {
         this.currentPage--;
         this.plugin.lastSearchPage = this.currentPage;
+        this.plugin.lastScrollPosition = 0;
         this.displayResults();
         this.resultsContainer.scrollTop = 0;
       }
@@ -4380,12 +4477,25 @@ var ScriptureSearchModal = class extends import_obsidian.Modal {
       if (this.currentPage < totalPages - 1) {
         this.currentPage++;
         this.plugin.lastSearchPage = this.currentPage;
+        this.plugin.lastScrollPosition = 0;
         this.displayResults();
         this.resultsContainer.scrollTop = 0;
       }
     });
   }
   onClose() {
+    if (this.otCheckbox) {
+      this.plugin.lastSelectedWorks = {
+        ot: this.otCheckbox.checked,
+        nt: this.ntCheckbox.checked,
+        bom: this.bomCheckbox.checked,
+        dac: this.dacCheckbox.checked,
+        pogp: this.pogpCheckbox.checked
+      };
+    }
+    if (this.regexCheckbox) {
+      this.plugin.lastSearchIsRegex = this.regexCheckbox.checked;
+    }
     this.dismissResultContextMenu();
     this.contentEl.empty();
   }

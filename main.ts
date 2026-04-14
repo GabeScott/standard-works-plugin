@@ -114,6 +114,7 @@ class ScriptureContextView extends ItemView {
 	private commentaryNextBtn: HTMLButtonElement;
 	private currentCommentaryRef: string | null = null;
 	private currentCommentaryRefOrder: number | null = null;
+	private wasActive: boolean = false;
 
 	constructor(leaf: WorkspaceLeaf, plugin: StandardWorksPlugin) {
 		super(leaf);
@@ -220,7 +221,20 @@ class ScriptureContextView extends ItemView {
 
 		// Register event to update when active file changes
 		this.registerEvent(
-			this.app.workspace.on("active-leaf-change", () => {
+			this.app.workspace.on("active-leaf-change", (leaf) => {
+				// Check if this view's leaf just became active
+				const isNowActive = leaf === this.leaf;
+				
+				if (isNowActive && !this.wasActive) {
+					// View just became active - scroll to current verse if we have one
+					if (this.currentVerse) {
+						setTimeout(() => {
+							this.scrollToActiveVerse();
+						}, 100);
+					}
+				}
+				
+				this.wasActive = isNowActive;
 				this.updateContext();
 			})
 		);
@@ -400,14 +414,14 @@ class ScriptureContextView extends ItemView {
 			const versesContainer = this.contentContainer.createDiv({ cls: "chapter-verses" });
 
 			const verseNumbers = Object.keys(chapterData).filter(k => k !== "heading").sort((a, b) => parseInt(a) - parseInt(b));
+			let activeVerseEl: HTMLElement | null = null;
+			
 			for (const verseNum of verseNumbers) {
 				const isActive = verseNum === verse;
 				const verseEl = versesContainer.createDiv({ cls: verseNum === verse ? "verse-item active" : "verse-item" });
 
 				if (verseNum === verse) {
-					setTimeout(() => {
-						verseEl.scrollIntoView({ behavior: "smooth", block: "center" });
-					}, 500);
+					activeVerseEl = verseEl;
 				}
 
 				verseEl.createEl("strong", { text: `${verseNum}. ` });
@@ -424,9 +438,29 @@ class ScriptureContextView extends ItemView {
 					this.showVerseContextMenu(e, bookName, chapter, verseNum, chapterData[verseNum]);
 				});
 			}
-
-			// Load commentary for the highlighted verse
+			
+			// Load commentary for the highlighted verse first
 			await this.loadCommentaryForVerse(bookName, chapter, verse);
+			
+			// Scroll to active verse after everything is loaded and rendered
+			if (activeVerseEl) {
+				const scrollContainer = this.contentContainer;
+				setTimeout(() => {
+					requestAnimationFrame(() => {
+						if (!activeVerseEl || !scrollContainer) return;
+						
+						const containerRect = scrollContainer.getBoundingClientRect();
+						const targetRect = activeVerseEl.getBoundingClientRect();
+						const relativeTop = targetRect.top - containerRect.top;
+						const scrollTarget = scrollContainer.scrollTop + relativeTop - (containerRect.height / 2) + (targetRect.height / 2);
+						
+						scrollContainer.scrollTo({
+							top: scrollTarget,
+							behavior: "smooth"
+						});
+					});
+				}, 150);
+			}
 		} catch (error) {
 			console.error("Error loading scripture context:", error);
 			this.contentContainer.createEl("p", { text: `Error loading context: ${error.message}` });
@@ -571,6 +605,43 @@ class ScriptureContextView extends ItemView {
 		// Scroll to the target verse after updating all styles
 		if (targetVerse) {
 			// Scroll the actual scrollable container (contentContainer), not the inner versesContainer
+			const scrollContainer = this.contentContainer;
+			requestAnimationFrame(() => {
+				if (!targetVerse || !scrollContainer) return;
+				
+				const containerRect = scrollContainer.getBoundingClientRect();
+				const targetRect = targetVerse.getBoundingClientRect();
+				const relativeTop = targetRect.top - containerRect.top;
+				const scrollTarget = scrollContainer.scrollTop + relativeTop - (containerRect.height / 2) + (targetRect.height / 2);
+				
+				scrollContainer.scrollTo({
+					top: scrollTarget,
+					behavior: "smooth"
+				});
+			});
+		}
+	}
+
+	private scrollToActiveVerse(): void {
+		if (!this.currentVerse || !this.contentContainer) return;
+		
+		const versesContainer = this.contentContainer.querySelector(".chapter-verses") as HTMLElement;
+		if (!versesContainer) return;
+		
+		const verseItems = versesContainer.querySelectorAll(".verse-item");
+		let targetVerse: HTMLElement | null = null;
+		
+		verseItems.forEach((verseEl) => {
+			const verseNumEl = verseEl.querySelector("strong");
+			if (!verseNumEl) return;
+			
+			const verseNum = verseNumEl.textContent?.replace(".", "").trim();
+			if (verseNum === this.currentVerse) {
+				targetVerse = verseEl as HTMLElement;
+			}
+		});
+		
+		if (targetVerse) {
 			const scrollContainer = this.contentContainer;
 			requestAnimationFrame(() => {
 				if (!targetVerse || !scrollContainer) return;
@@ -910,6 +981,7 @@ export default class StandardWorksPlugin extends Plugin {
 	lastSearchResults: SearchResult[] = [];
 	lastSearchPage: number = 0;
 	lastSearchIsRegex: boolean = false;
+	lastScrollPosition: number = 0;
 	lastSelectedWorks: { ot: boolean; nt: boolean; bom: boolean; dac: boolean; pogp: boolean } = {
 		ot: true,
 		nt: true,
@@ -1589,13 +1661,8 @@ export default class StandardWorksPlugin extends Plugin {
 		let matchFn: (text: string) => boolean;
 		if (useRegex) {
 			try {
-				// Convert wildcard syntax: * → .*, ? → . (only if not already valid regex)
-				let pattern = searchTerm;
-				// Replace unescaped * not preceded by . with .*
-				pattern = pattern.replace(/(?<!\.)\*/g, '.*');
-				// Replace unescaped ? not preceded by \ with .
-				pattern = pattern.replace(/(?<!\\)\?/g, '.');
-				const regex = new RegExp(pattern, 'i');
+				// User can input raw regex  - no wildcard conversion needed
+				const regex = new RegExp(searchTerm, 'i');
 				matchFn = (text: string) => regex.test(text);
 			} catch (e) {
 				new Notice(`Invalid regex pattern: ${e.message}`);
@@ -2044,6 +2111,7 @@ class ScriptureSearchModal extends Modal {
 	private inputEl: HTMLInputElement;
 	private activeContextMenu: HTMLElement | null = null;
 	private boundDismissMenu: ((e: Event) => void) | null = null;
+	private scrollListenerAttached: boolean = false;
 	
 	// Checkboxes for each work
 	private otCheckbox: HTMLInputElement;
@@ -2078,7 +2146,7 @@ class ScriptureSearchModal extends Modal {
 		const regexLabel = headerRow.createEl("label", { cls: "search-regex-toggle" });
 		this.regexCheckbox = regexLabel.createEl("input", { attr: { type: "checkbox" } });
 		if (this.isRegex) this.regexCheckbox.checked = true;
-		regexLabel.appendText(" Regex/Wildcard");
+		regexLabel.appendText(" Use Regex");
 		
 		// Search input container
 		const searchContainer = contentEl.createEl("div", { cls: "search-input-container" });
@@ -2086,7 +2154,7 @@ class ScriptureSearchModal extends Modal {
 		this.inputEl = searchContainer.createEl("input", {
 			type: "text",
 			attr: { 
-				placeholder: "Enter search phrase (use * for wildcard, or regex)...",
+				placeholder: "Enter search phrase or regex pattern...",
 				value: this.searchTerm
 			}
 		});
@@ -2105,6 +2173,9 @@ class ScriptureSearchModal extends Modal {
 		
 		// Results container
 		this.resultsContainer = contentEl.createEl("div", { cls: "search-results-container" });
+		
+		// Add scroll listener once and keep it active
+		this.attachScrollListener();
 		
 		// Pagination container
 		this.paginationContainer = contentEl.createEl("div", { cls: "pagination-container" });
@@ -2141,6 +2212,14 @@ class ScriptureSearchModal extends Modal {
 		// Initial message or display saved results
 		if (this.searchResults.length > 0) {
 			this.displayResults();
+			
+			// Restore scroll position after rendering
+			const savedScrollPosition = this.plugin.lastScrollPosition;
+			setTimeout(() => {
+				requestAnimationFrame(() => {
+					this.resultsContainer.scrollTop = savedScrollPosition;
+				});
+			}, 100);
 		} else {
 			this.resultsContainer.createEl("p", { 
 				text: "Enter a search phrase and click Search to find verses.",
@@ -2149,12 +2228,23 @@ class ScriptureSearchModal extends Modal {
 		}
 	}
 	
+	private attachScrollListener() {
+		if (this.scrollListenerAttached) return;
+		
+		this.resultsContainer.addEventListener("scroll", () => {
+			this.plugin.lastScrollPosition = this.resultsContainer.scrollTop;
+		});
+		
+		this.scrollListenerAttached = true;
+	}
+	
 	private createCheckbox(container: HTMLElement, label: string, checked: boolean): HTMLInputElement {
 		const labelEl = container.createEl("label");
 		
 		const checkbox = labelEl.createEl("input", {
-			attr: { type: "checkbox", checked: checked }
+			type: "checkbox"
 		});
+		checkbox.checked = checked;
 		
 		labelEl.appendText(label);
 		
@@ -2171,6 +2261,9 @@ class ScriptureSearchModal extends Modal {
 		this.isRegex = this.regexCheckbox.checked;
 		this.currentPage = 0;
 		this.selectedIndex = -1;
+		
+		// Reset scroll position for new search
+		this.plugin.lastScrollPosition = 0;
 		
 		// Show loading message
 		this.resultsContainer.empty();
@@ -2213,6 +2306,14 @@ class ScriptureSearchModal extends Modal {
 		
 		// Display results
 		this.displayResults();
+		
+		// Restore scroll position after rendering (for new search, it will be 0)
+		const savedScrollPosition = this.plugin.lastScrollPosition;
+		setTimeout(() => {
+			requestAnimationFrame(() => {
+				this.resultsContainer.scrollTop = savedScrollPosition;
+			});
+		}, 100);
 	}
 	
 	private displayResults() {
@@ -2427,21 +2528,45 @@ class ScriptureSearchModal extends Modal {
 		
 		const escapedText = escapeHtml(text);
 		
-		let regex: RegExp;
 		if (this.isRegex) {
+			// Try to extract actual search terms from lookaheads for highlighting
+			// Pattern: (?=.*word) or (?=.*\bword\b) - extract the word
+			const lookaheadMatches = searchTerm.matchAll(/\(\?=\.\*\\?b?([^)\\]+?)\\?b?\)/g);
+			const termsToHighlight: string[] = [];
+			
+			for (const match of lookaheadMatches) {
+				if (match[1]) {
+					termsToHighlight.push(match[1]);
+				}
+			}
+			
+			// If we found lookahead terms, highlight each one
+			if (termsToHighlight.length > 0) {
+				let result = escapedText;
+				for (const term of termsToHighlight) {
+					try {
+						const highlightRegex = new RegExp(`(${term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+						result = result.replace(highlightRegex, '<mark style="background-color: var(--text-highlight-bg); color: var(--text-normal); padding: 2px 0;">$1</mark>');
+					} catch {
+						// Skip this term if it causes an error
+					}
+				}
+				return result;
+			}
+			
+			// Otherwise try to use the pattern directly (for simple regex)
 			try {
-				let pattern = searchTerm;
-				pattern = pattern.replace(/(?<!\.)\*/g, '.*');
-				pattern = pattern.replace(/(?<!\\)\?/g, '.');
-				regex = new RegExp(`(${pattern})`, 'gi');
+				const regex = new RegExp(`(${searchTerm})`, 'gi');
+				return escapedText.replace(regex, '<mark style="background-color: var(--text-highlight-bg); color: var(--text-normal); padding: 2px 0;">$1</mark>');
 			} catch {
+				// If regex is too complex or invalid for highlighting, just return text
 				return escapedText;
 			}
 		} else {
-			regex = new RegExp(`(${searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+			// Simple text search
+			const regex = new RegExp(`(${searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+			return escapedText.replace(regex, '<mark style="background-color: var(--text-highlight-bg); color: var(--text-normal); padding: 2px 0;">$1</mark>');
 		}
-		
-		return escapedText.replace(regex, '<mark style="background-color: var(--text-highlight-bg); color: var(--text-normal); padding: 2px 0;">$1</mark>');
 	}
 	
 	private updatePagination() {
@@ -2458,6 +2583,7 @@ class ScriptureSearchModal extends Modal {
 			if (this.currentPage > 0) {
 				this.currentPage--;
 				this.plugin.lastSearchPage = this.currentPage;
+				this.plugin.lastScrollPosition = 0; // Reset scroll on page change
 				this.displayResults();
 				this.resultsContainer.scrollTop = 0;
 			}
@@ -2475,6 +2601,7 @@ class ScriptureSearchModal extends Modal {
 			if (this.currentPage < totalPages - 1) {
 				this.currentPage++;
 				this.plugin.lastSearchPage = this.currentPage;
+				this.plugin.lastScrollPosition = 0; // Reset scroll on page change
 				this.displayResults();
 				this.resultsContainer.scrollTop = 0;
 			}
@@ -2482,6 +2609,24 @@ class ScriptureSearchModal extends Modal {
 	}
 
 	onClose() {
+		// Scroll position is already saved by the scroll listener - no need to re-read it
+		
+		// Save checkbox states (in case user toggled them without searching)
+		if (this.otCheckbox) {
+			this.plugin.lastSelectedWorks = {
+				ot: this.otCheckbox.checked,
+				nt: this.ntCheckbox.checked,
+				bom: this.bomCheckbox.checked,
+				dac: this.dacCheckbox.checked,
+				pogp: this.pogpCheckbox.checked
+			};
+		}
+		
+		// Save regex checkbox state
+		if (this.regexCheckbox) {
+			this.plugin.lastSearchIsRegex = this.regexCheckbox.checked;
+		}
+		
 		this.dismissResultContextMenu();
 		this.contentEl.empty();
 	}
