@@ -1,7 +1,4 @@
 import { build } from "esbuild";
-import pkg from "./package.json" assert { type: "json" };
-
-const externals = ["obsidian", ...Object.keys(pkg.dependencies)];
 
 build({
   entryPoints: ["main.ts"],
@@ -9,7 +6,7 @@ build({
   outfile: "main.js",
   platform: "node",
   target: ["es2020"],
-  external: externals,
+  external: ["obsidian"],
   format: "cjs",
   minify: true,
   sourcemap: false,
