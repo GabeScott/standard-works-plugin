@@ -13,11 +13,13 @@ interface ScriptureData {
 interface StandardWorksPluginSettings {
 	orderBacklinks: boolean;
 	translationLanguages: string[];
+	linkifySentencesToScan: number;
 }
 
 const DEFAULT_SETTINGS: StandardWorksPluginSettings = {
 	orderBacklinks: true,
-	translationLanguages: ["eng"]
+	translationLanguages: ["eng"],
+	linkifySentencesToScan: 1,
 };
 
 // Single source of truth: groups books by data file, preserving canonical scripture order
@@ -1093,7 +1095,7 @@ export default class StandardWorksPlugin extends Plugin {
 
 		this.addCommand({
 			id: "linkify-selected-text",
-			name: "Linkify selected text",
+			name: "Linkify scripture references",
 			editorCallback: (editor: Editor, view: MarkdownView) => {
 				this.linkifySelectedText(editor);
 			},
@@ -1550,65 +1552,235 @@ export default class StandardWorksPlugin extends Plugin {
 		return verses;
 	}
 
-	private linkifySelectedText(editor: Editor) {
-		const selectedText = editor.getSelection().trim();
-		let selectedTextFixed = selectedText;
+	// Return an array of [start, end) index pairs for every [[...]] wikilink span in text.
+	// Used to skip matches that already fall inside an existing wikilink.
+	private wikilinkRanges(text: string): Array<[number, number]> {
+		const ranges: Array<[number, number]> = [];
+		const wlRegex = /\[\[.*?\]\]/gs;
+		let m: RegExpExecArray | null;
+		while ((m = wlRegex.exec(text)) !== null) {
+			ranges.push([m.index, m.index + m[0].length]);
+		}
+		return ranges;
+	}
 
-		// Get all the words except the last one
-		let book = selectedText.split(" ").slice(0, -1).join(" ");
+	// Return true if any character of [matchStart, matchStart+matchLen) falls inside a wikilink range.
+	private isInsideWikilink(matchStart: number, matchLen: number, ranges: Array<[number, number]>): boolean {
+		const matchEnd = matchStart + matchLen;
+		for (const [rs, re] of ranges) {
+			// Overlaps if match start < range end AND match end > range start
+			if (matchStart < re && matchEnd > rs) return true;
+		}
+		return false;
+	}
+
+	// Build a wikilink string for a single scripture reference token (e.g. "John 3:16").
+	// Returns the replacement string, or the original token if no matching file is found.
+	private linkifySingleRef(refText: string): string {
+		const trimmed = refText.trim();
+		let result = trimmed;
+
+		let book = trimmed.split(" ").slice(0, -1).join(" ");
 		book = abbreviations[book] || book;
 
 		let chapter = "";
 		let verses: string[] = [];
 
-		if (!selectedText.includes(":")) {
-			chapter = selectedText.split(" ").slice(-1)[0];
+		if (!trimmed.includes(":")) {
+			chapter = trimmed.split(" ").slice(-1)[0];
 			verses = this.getNumVerses(book, chapter);
-		}
-		else{
-			chapter = selectedText.split(" ").slice(-1)[0].split(":")[0];
-			verses = selectedText.split(" ").slice(-1)[0].split(":")[1].split(",").map((v: string) => v.trim());
+		} else {
+			chapter = trimmed.split(" ").slice(-1)[0].split(":")[0];
+			verses = trimmed.split(" ").slice(-1)[0].split(":")[1].split(",").map((v: string) => v.trim());
 		}
 
 		let finishedFirst = false;
 
 		for (const verse of verses) {
-			
 			if (verse.includes("-")) {
 				const [start, end] = verse.split("-");
 				for (let i = parseInt(start); i <= parseInt(end); i++) {
-					console.log(i);
 					const filename = `${book} ${chapter}.${i}`;
-					if(this.fileExists(filename)){
-						if(finishedFirst)
-							selectedTextFixed += `[[${filename}|]]`;
-						else{
-							selectedTextFixed = `[[${filename}|${selectedText}]]`;
+					const files = this.app.vault.getFiles();
+					const target = filename + ".md";
+					const exists = files.some(f => f.name === target);
+					if (exists) {
+						if (finishedFirst)
+							result += `[[${filename}|]]`;
+						else {
+							result = `[[${filename}|${trimmed}]]`;
 							finishedFirst = true;
 						}
 					}
 				}
 			} else {
 				const filename = `${book} ${chapter}.${verse}`;
-				if(this.fileExists(filename)){
-					if(finishedFirst)
-						selectedTextFixed += `[[${filename}|]]`;
-					else{
-						selectedTextFixed = `[[${filename}|${selectedText}]]`;
+				const files = this.app.vault.getFiles();
+				const target = filename + ".md";
+				const exists = files.some(f => f.name === target);
+				if (exists) {
+					if (finishedFirst)
+						result += `[[${filename}|]]`;
+					else {
+						result = `[[${filename}|${trimmed}]]`;
 						finishedFirst = true;
 					}
 				}
 			}
-			
 		}
 
-		if (!selectedTextFixed) {
-			new Notice("No text selected");
+		return result;
+	}
+
+	// Build a regex that matches any known scripture reference (book name or abbreviation
+	// followed by chapter:verse or chapter:verse-range or chapter:v1,v2,...).
+	private buildScriptureRefRegex(): RegExp {
+		// Collect all recognised book tokens (full names + abbreviation keys), sorted
+		// longest-first so multi-word names like "1 Nephi" match before bare "Nephi".
+		const bookTokens: string[] = [];
+		for (const [abbr, full] of Object.entries(abbreviations)) {
+			bookTokens.push(full);
+			if (abbr !== full) bookTokens.push(abbr);
+		}
+		// Deduplicate and sort longest-first
+		const unique = [...new Set(bookTokens)];
+		unique.sort((a, b) => b.length - a.length);
+
+		// Escape each token for use in a regex
+		const escaped = unique.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+
+		// Reference pattern: <book> <chapter>(:<verses>)?
+		// verses = digit(s), optional range (-digit+) or comma-list
+		const pattern = `(${escaped.join("|")})\\s+(\\d+(?::\\d+(?:[,\\-]\\d+)*)?)`;
+		return new RegExp(pattern, "g");
+	}
+
+	// Extract the text region covering the last N sentences ending at the cursor.
+	// Returns { text, from, to } using CodeMirror-style {line, ch} positions.
+	private extractLastNSentences(editor: Editor, n: number): { text: string; from: { line: number; ch: number }; to: { line: number; ch: number } } | null {
+		const cursor = editor.getCursor();
+		// Collect text from the start of the document up to the cursor
+		let allText = "";
+		for (let ln = 0; ln < cursor.line; ln++) {
+			allText += editor.getLine(ln) + "\n";
+		}
+		allText += editor.getLine(cursor.line).slice(0, cursor.ch);
+
+		if (!allText.trim()) return null;
+
+		// Walk backward finding sentence boundaries: [.!?] followed by whitespace or end.
+		// We skip the trailing boundary of the cursor position itself and count N more.
+		// Note: abbreviations ending in "." (e.g. "v.", "vs.", "1 Ne.") can produce
+		// false sentence splits. We do not attempt to fix all cases — common LDS
+		// scripture prose still works because the abbreviation period is usually
+		// surrounded by word chars, not by two spaces.
+		let boundariesFound = 0;
+		let cutIndex = allText.length;
+
+		for (let i = allText.length - 1; i >= 0; i--) {
+			const ch = allText[i];
+			if (ch === "." || ch === "!" || ch === "?") {
+				// Check that something follows this terminator (space/newline) or it's the last char
+				const next = allText[i + 1];
+				if (next === undefined || next === " " || next === "\n" || next === "\r") {
+					// Skip if this looks like a likely abbreviation: single capital letter before dot,
+					// or known short sequences like "v." / "vs." at the period position.
+					const before = allText.slice(Math.max(0, i - 3), i);
+					if (/\b(v|vs|Dr|Mr|Mrs|St|Jr|Sr)$/.test(before)) continue;
+					boundariesFound++;
+					if (boundariesFound === n) {
+						cutIndex = i + 1; // include the terminator character
+						break;
+					}
+				}
+			}
+		}
+
+		// cutIndex is where our N-sentence window starts
+		const windowText = allText.slice(cutIndex);
+		if (!windowText.trim()) return null;
+
+		// Convert cutIndex (offset in allText) back to {line, ch}
+		let remaining = cutIndex;
+		let fromLine = 0;
+		let fromCh = 0;
+		for (let ln = 0; ln <= cursor.line; ln++) {
+			const lineLen = ln < cursor.line
+				? editor.getLine(ln).length + 1  // +1 for \n
+				: cursor.ch;
+			if (remaining <= lineLen) {
+				fromLine = ln;
+				fromCh = remaining;
+				break;
+			}
+			remaining -= lineLen;
+		}
+
+		return {
+			text: windowText,
+			from: { line: fromLine, ch: fromCh },
+			to: { line: cursor.line, ch: cursor.ch },
+		};
+	}
+
+	private linkifySelectedText(editor: Editor) {
+		const selection = editor.getSelection();
+
+		if (selection.trim()) {
+			// --- Selection-based path (original behavior) ---
+			const selectedText = selection.trim();
+			// If the selected text is already (or is contained within) a wikilink, skip it.
+			const selRanges = this.wikilinkRanges(selectedText);
+			if (selRanges.length > 0 && this.isInsideWikilink(0, selectedText.length, selRanges)) {
+				new Notice("Selection is already a wikilink");
+				return;
+			}
+			const result = this.linkifySingleRef(selectedText);
+			if (result === selectedText) {
+				new Notice("No matching scripture reference found in selection");
+				return;
+			}
+			editor.replaceSelection(result);
 			return;
 		}
 
-		editor.replaceSelection(selectedTextFixed);
+		// --- No-selection path: scan last N sentences from cursor ---
+		const n = Math.max(1, Math.min(10, this.settings.linkifySentencesToScan ?? 1));
+		const region = this.extractLastNSentences(editor, n);
 
+		if (!region) {
+			new Notice("No text found before cursor to linkify");
+			return;
+		}
+
+		const regex = this.buildScriptureRefRegex();
+		// Pre-compute all wikilink spans in the region so we can skip matches that
+		// fall inside an existing [[...]] (e.g. the display text after the pipe).
+		const wlRanges = this.wikilinkRanges(region.text);
+		let anyReplaced = false;
+		const replaced = region.text.replace(regex, (match: string, ...args: unknown[]) => {
+			// args: capture groups..., offset, fullString
+			const offset = args[args.length - 2] as number;
+			// Skip if this match overlaps any existing wikilink span
+			if (this.isInsideWikilink(offset, match.length, wlRanges)) return match;
+			const linked = this.linkifySingleRef(match);
+			if (linked !== match) anyReplaced = true;
+			return linked;
+		});
+
+		if (!anyReplaced) {
+			new Notice("No scripture references found in the last " + n + " sentence" + (n === 1 ? "" : "s"));
+			return;
+		}
+
+		editor.replaceRange(replaced, region.from, region.to);
+		// Place cursor at end of replaced text, accounting for possible newlines
+		const replacedLines = replaced.split("\n");
+		const endLine = region.from.line + replacedLines.length - 1;
+		const endCh = replacedLines.length === 1
+			? region.from.ch + replaced.length
+			: replacedLines[replacedLines.length - 1].length;
+		editor.setCursor(endLine, endCh);
 	}
 
 	private goToVerse(reference: string) {
@@ -2654,6 +2826,20 @@ class StandardWorksPluginSettingTab extends PluginSettingTab {
 				.onChange(async (value) => {
 					this.plugin.settings.orderBacklinks = value;
 					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName("Linkify: sentences to scan")
+			.setDesc("When running 'Linkify scripture references' with no text selected, scan this many sentences backward from the cursor for scripture references. Default: 1. Max: 10.")
+			.addText(text => text
+				.setPlaceholder("1")
+				.setValue(String(this.plugin.settings.linkifySentencesToScan ?? 1))
+				.onChange(async (value) => {
+					const parsed = parseInt(value, 10);
+					if (!isNaN(parsed) && parsed >= 1 && parsed <= 10) {
+						this.plugin.settings.linkifySentencesToScan = parsed;
+						await this.plugin.saveSettings();
+					}
 				}));
 
 		containerEl.createEl("h3", { text: "Translation Languages" });
