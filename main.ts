@@ -997,7 +997,7 @@ export default class StandardWorksPlugin extends Plugin {
 		await this.loadSqlJs();
 		await this.ensureDataDirectory();
 		await this.loadDatabase();
-		console.log("Loading LDSS Plugin");
+		console.log("Loading Standard Works Plugin");
 
 		// Register the custom view
 		this.registerView(
@@ -1139,37 +1139,6 @@ export default class StandardWorksPlugin extends Plugin {
 		
 		// Open Scripture Context View by default
 		this.activateView();
-	}
-
-	private async displayResults(tries: number = 0) {
-		// Get current active file name as default reference
-		const activeFile = this.app.workspace.getActiveFile();
-		let defaultReference = activeFile ? activeFile.basename : "";
-
-		defaultReference = defaultReference.replace(".", ":") // Replace ":" with "."
-		// Remove any leading or trailing whitespace
-		try{
-			const stmt = this.db.prepare("SELECT content FROM ldss WHERE reference = :ref");
-			stmt.bind({ ":ref": defaultReference });
-			
-			if (stmt.step()) {
-				const row = stmt.get();
-				const content = row[0] as string;
-				stmt.free();
-				new ResultsModal(this.app, `Reference: ${defaultReference}\n\n${content}`).open();
-			} else {
-				stmt.free();
-				new ResultsModal(this.app, `No results found for reference: ${defaultReference}`).open();
-			}
-		} catch (err) {
-			await this.loadDatabase();
-			tries++;
-			if (tries > 3) {
-				new Notice("Error searching for reference.");
-				return;
-			}
-			this.displayResults(tries);
-		}
 	}
 
 	private sortBacklinksSafely(container: Element) {
@@ -1880,58 +1849,6 @@ export default class StandardWorksPlugin extends Plugin {
 		}
 		
 		return results;
-	}
-}
-
-class ResultsModal extends Modal {
-	results: string;
-	wordWrap: boolean = true;
-
-	constructor(app: App, results: string) {
-		super(app);
-		this.results = results;
-	}
-
-	onOpen() {
-		const { contentEl } = this;
-		
-		this.modalEl.addClass("results-modal");
-		
-		contentEl.createEl("h2", { text: "Query Results" });
-		
-		// Create controls div
-		const controlsDiv = contentEl.createEl("div", { cls: "results-controls" });
-		
-		// Add word wrap toggle
-		const wrapToggleLabel = controlsDiv.createEl("label");
-		const wrapToggle = wrapToggleLabel.createEl("input", {
-			attr: { 
-				type: "checkbox",
-				checked: this.wordWrap
-			}
-		});
-		wrapToggleLabel.append(" Word Wrap");
-		
-		// Create results container
-		const resultsContainer = contentEl.createEl("div", { cls: "results-container" });
-		
-		// Create pre element for the content
-		const pre = resultsContainer.createEl("pre", { text: this.results });
-		pre.style.overflowX = this.wordWrap ? "hidden" : "auto";
-		pre.style.whiteSpace = this.wordWrap ? "pre-wrap" : "pre";
-		pre.style.wordBreak = this.wordWrap ? "break-word" : "normal";
-		
-		// Handle word wrap toggle
-		wrapToggle.addEventListener("change", () => {
-			this.wordWrap = wrapToggle.checked;
-			pre.style.whiteSpace = this.wordWrap ? "pre-wrap" : "pre";
-			pre.style.wordBreak = this.wordWrap ? "break-word" : "normal";
-			pre.style.overflowX = this.wordWrap ? "hidden" : "auto";
-		});
-	}
-
-	onClose() {
-		this.contentEl.empty();
 	}
 }
 
