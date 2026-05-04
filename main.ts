@@ -2747,7 +2747,7 @@ class StandardWorksPluginSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Linkify: sentences to scan")
-			.setDesc("When running 'Linkify scripture references' with no text selected, scan this many sentences backward from the cursor for scripture references. Default: 1. Max: 10.")
+			.setDesc("When running 'Linkify scripture references' with no text selected, scan this many sentences backward from the cursor for scripture references. Default: 1. Max: 10. Note: LDS abbreviations ending in a period (e.g. '1 Ne.', 'Moro.', 'D&C') can fool the sentence splitter — setting this to 2 or higher works around most false splits.")
 			.addText(text => text
 				.setPlaceholder("1")
 				.setValue(String(this.plugin.settings.linkifySentencesToScan ?? 1))
