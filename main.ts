@@ -1135,8 +1135,16 @@ export default class StandardWorksPlugin extends Plugin {
 			}
 		});
 
+		this.addRibbonIcon("panel-right-open", "Open Scripture Context View", () => {
+			this.activateView();
+		});
+
+		this.addRibbonIcon("languages", "Open Translation View", () => {
+			this.activateTranslationView();
+		});
+
 		this.addSettingTab(new StandardWorksPluginSettingTab(this.app, this));
-		
+
 		// Open Scripture Context View by default
 		this.activateView();
 	}
