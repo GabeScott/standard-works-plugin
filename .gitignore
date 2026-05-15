@@ -15,4 +15,5 @@
 !package.json
 !package-lock.json
 !esbuild.config.mjs
-
+!.github/
+!.github/**

@@ -55,7 +55,6 @@ Submission to the Obsidian Community Plugin Store is planned for a future releas
 
 > **Note:** The plugin ships with `main.js`, `manifest.json`, and `styles.css`. Make sure all three files are present in the plugin folder.
 
-<!-- TODO (blocked on SWP_0008): Add a reference to the commentary.db schema doc once it lands, so users know the expected database format. -->
 <!-- TODO (blocked on SWP_0006): Add a note on translation data behavior once SWP_0006 is resolved. -->
 
 ---
@@ -65,6 +64,32 @@ Submission to the Obsidian Community Plugin Store is planned for a future releas
 This plugin is designed around the [Standard Works Vault](https://github.com/GabeScott/standard-works-vault) — a companion Obsidian vault containing one note per verse across all five standard works of The Church of Jesus Christ of Latter-day Saints. The plugin assumes the vault's filename conventions (e.g. `Alma 37.6.md` for Alma 37:6) when resolving links and sorting backlinks in canonical order.
 
 You do not need the vault to use every feature, but the backlink sorter and verse-note navigation work best when your notes follow these conventions. If you don't have the vault, search for **"Standard Works Vault"** on [GitHub](https://github.com/GabeScott/standard-works-vault).
+
+---
+
+## Commentary database schema
+
+The plugin ships a SQLite database at `data/commentary.db` (inside the plugin folder). It is opened read-only at runtime — the plugin never writes to it.
+
+### Table: `ldss`
+
+| Column | Type | Description |
+|---|---|---|
+| `reference` | TEXT | Scripture reference string used as the lookup key (e.g. `John 3:16`). Should be unique per row. |
+| `content` | TEXT | The commentary body for that reference. May be multi-line. |
+| `ref_order` | INTEGER | Sequential integer that defines canonical ordering across all entries. Used for Prev/Next navigation. |
+
+### Sample row
+
+```
+reference  | content                                              | ref_order
+-----------+------------------------------------------------------+----------
+John 3:16  | A note explaining the doctrine taught in this verse. | 4273
+```
+
+### Bring your own database
+
+If you want to replace the bundled commentary with your own content, create a SQLite file that matches this schema and drop it at `data/commentary.db` in the plugin folder. The plugin will pick it up on next load. The only hard requirements are the three columns above — column order does not matter, but the names and the `ldss` table name must match exactly.
 
 ---
 
