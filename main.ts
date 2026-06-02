@@ -1151,6 +1151,14 @@ export default class StandardWorksPlugin extends Plugin {
 			}
 		});
 
+		this.addCommand({
+			id: "open-cfm-today",
+			name: "Open Come Follow Me for today",
+			callback: () => {
+				this.openCfmForToday();
+			}
+		});
+
 		this.addRibbonIcon("panel-right-open", "Open Scripture Context View", () => {
 			this.activateView();
 		});
@@ -1818,7 +1826,107 @@ export default class StandardWorksPlugin extends Plugin {
 		
 		this.app.workspace.getLeaf('tab').openFile(targetFile);
 	}
-	
+
+	/**
+	 * Parse a Come Follow Me weekly filename into a [start, end] date interval.
+	 * Returns null if the filename does not match the weekly pattern (i.e. non-weekly
+	 * intro/overview files should be skipped by callers on a null return).
+	 *
+	 * Handles:
+	 *   - Same-month weeks:     "June 1–7"        → Jun 1 .. Jun 7 (same year as series)
+	 *   - Cross-month weeks:    "June 29–July 5"  → Jun 29 .. Jul 5 (same year as series)
+	 *   - Cross-year weeks:     "December 29–January 4" → Dec 29 of <YEAR>, Jan 4 of <YEAR>+1
+	 *
+	 * The EN-DASH (U+2013) is required between start-day and end-portion.
+	 * The <YEAR> token is the series start year embedded once in the filename.
+	 */
+	private parseCfmDateRange(filename: string): { start: Date; end: Date } | null {
+		// Month name → 0-based index
+		const MONTH_NAMES: Record<string, number> = {
+			"January": 0, "February": 1, "March": 2, "April": 3,
+			"May": 4, "June": 5, "July": 6, "August": 7,
+			"September": 8, "October": 9, "November": 10, "December": 11
+		};
+
+		// Pattern: "Come Follow Me <YEAR> - <StartMonth> <StartDay>–<EndPortion>. ..."
+		// The en-dash is U+2013. EndPortion is either:
+		//   - a plain integer (same month):         "7"
+		//   - "<MonthName> <integer>" (cross-month): "July 5"
+		// We require the <MonthName> <Day>– segment to be present; if it isn't this is a non-weekly file.
+		const RE = /^Come Follow Me (\d{4}) - ([A-Za-z]+) (\d+)–(?:([A-Za-z]+) )?(\d+)\./;
+		const m = filename.match(RE);
+		if (!m) return null;
+
+		const seriesYear = parseInt(m[1], 10);
+		const startMonthName = m[2];
+		const startDay = parseInt(m[3], 10);
+		const endMonthName = m[4] ?? null;  // present only for cross-month/cross-year weeks
+		const endDay = parseInt(m[5], 10);
+
+		const startMonthIdx = MONTH_NAMES[startMonthName];
+		if (startMonthIdx === undefined) return null;
+
+		const start = new Date(seriesYear, startMonthIdx, startDay);
+
+		let end: Date;
+		if (endMonthName === null) {
+			// Same-month week: end is in the same month and year as start
+			end = new Date(seriesYear, startMonthIdx, endDay);
+		} else {
+			const endMonthIdx = MONTH_NAMES[endMonthName];
+			if (endMonthIdx === undefined) return null;
+			// Cross-year: end month is numerically earlier than start month (e.g. Jan < Dec)
+			const endYear = endMonthIdx < startMonthIdx ? seriesYear + 1 : seriesYear;
+			end = new Date(endYear, endMonthIdx, endDay);
+		}
+
+		return { start, end };
+	}
+
+	/**
+	 * Open the Come Follow Me weekly note whose date range covers today, in a new tab.
+	 * Shows a Notice if no matching file is found or if the folder is absent.
+	 */
+	private openCfmForToday(): void {
+		const CFM_FOLDER = "Come Follow Me";
+
+		const today = new Date();
+		// Normalise to midnight so date comparisons are day-only (no time component)
+		const todayNorm = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+
+		const allFiles = this.app.vault.getFiles();
+		const cfmFiles = allFiles.filter(f => {
+			// Must live directly inside the "Come Follow Me" folder
+			return f.parent?.name === CFM_FOLDER;
+		});
+
+		if (cfmFiles.length === 0) {
+			new Notice(`Come Follow Me folder not found or is empty ("${CFM_FOLDER}/").`);
+			return;
+		}
+
+		let matchedFile: TFile | null = null;
+
+		for (const file of cfmFiles) {
+			if (file.extension !== "md") continue;
+			const range = this.parseCfmDateRange(file.basename);
+			if (!range) continue; // non-weekly file — skip
+
+			const { start, end } = range;
+			if (todayNorm >= start && todayNorm <= end) {
+				matchedFile = file;
+				break;
+			}
+		}
+
+		if (!matchedFile) {
+			new Notice(`No Come Follow Me note found for today (${todayNorm.toDateString()}).`);
+			return;
+		}
+
+		this.app.workspace.getLeaf('tab').openFile(matchedFile);
+	}
+
 	/**
 	 * Navigate to the next (direction=1) or previous (direction=-1) verse,
 	 * crossing chapter, book, and volume boundaries as needed.

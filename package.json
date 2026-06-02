@@ -1,6 +1,6 @@
 {
 	"name": "standard-works-plugin",
-	"version": "0.5.0",
+	"version": "0.6.0",
 	"description": "An Obsidian plugin to query SQLite databases.",
 	"main": "main.js",
 	"scripts": {
