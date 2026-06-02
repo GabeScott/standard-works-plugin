@@ -100,9 +100,9 @@ class ScriptureContextView extends ItemView {
 	private contentContainer: HTMLElement;
 	private isUpdating: boolean = false;
 	private currentFile: string | null = null;
-	private currentBook: string | null = null;
-	private currentChapter: string | null = null;
-	private currentVerse: string | null = null;
+	currentBook: string | null = null;
+	currentChapter: string | null = null;
+	currentVerse: string | null = null;
 	private updateOnFileChange: boolean = true;
 	private chapterHeaderEl: HTMLElement;
 	private updateDebounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1135,6 +1135,22 @@ export default class StandardWorksPlugin extends Plugin {
 			}
 		});
 
+		this.addCommand({
+			id: "navigate-next-verse",
+			name: "Next verse",
+			callback: () => {
+				this.navigateVerse(1);
+			}
+		});
+
+		this.addCommand({
+			id: "navigate-previous-verse",
+			name: "Previous verse",
+			callback: () => {
+				this.navigateVerse(-1);
+			}
+		});
+
 		this.addRibbonIcon("panel-right-open", "Open Scripture Context View", () => {
 			this.activateView();
 		});
@@ -1803,6 +1819,213 @@ export default class StandardWorksPlugin extends Plugin {
 		this.app.workspace.getLeaf('tab').openFile(targetFile);
 	}
 	
+	/**
+	 * Navigate to the next (direction=1) or previous (direction=-1) verse,
+	 * crossing chapter, book, and volume boundaries as needed.
+	 *
+	 * Position source priority:
+	 *   1. The currently active vault file (if it matches the verse filename pattern).
+	 *   2. The ScriptureContextView's tracked position (currentBook/Chapter/Verse).
+	 *
+	 * At the absolute start/end of the standard works the call is a no-op with a Notice.
+	 */
+	private async navigateVerse(direction: 1 | -1): Promise<void> {
+		// --- 1. Resolve current position ---
+		let book = "";
+		let chapter = "";
+		let verse = "";
+
+		const activeFile = this.app.workspace.getActiveFile();
+		if (activeFile) {
+			const m = activeFile.basename.match(/^(.+?)\s+(\d+)\.(\d+)$/);
+			if (m) {
+				book = m[1];
+				chapter = m[2];
+				verse = m[3];
+			}
+		}
+
+		// Fall back to ScriptureContextView if active file didn't give us a position
+		if (!book) {
+			const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_SCRIPTURE_CONTEXT);
+			if (leaves.length > 0) {
+				const ctxView = leaves[0].view as ScriptureContextView;
+				if (ctxView.currentBook && ctxView.currentChapter && ctxView.currentVerse) {
+					book = ctxView.currentBook;
+					chapter = ctxView.currentChapter;
+					verse = ctxView.currentVerse;
+				}
+			}
+		}
+
+		if (!book || !chapter || !verse) {
+			new Notice("No current verse — open a scripture note first");
+			return;
+		}
+
+		// --- 2. Load the data file for this book and determine verse/chapter counts ---
+		const dataFile = BOOK_TO_FILE[book];
+		if (!dataFile) {
+			new Notice(`Unknown book: ${book}`);
+			return;
+		}
+
+		const scriptureData = await this.getScriptureData(dataFile);
+		const bookData = scriptureData[book];
+		if (!bookData) {
+			new Notice(`Book data not found: ${book}`);
+			return;
+		}
+
+		const chapters = Object.keys(bookData)
+			.filter(k => k !== "heading")
+			.map(Number)
+			.sort((a, b) => a - b);
+
+		const chapterNum = parseInt(chapter);
+		const verseNum = parseInt(verse);
+
+		// Verses in the current chapter (numeric, sorted)
+		const chapterData = bookData[String(chapterNum)] as { [key: string]: string };
+		const verses = Object.keys(chapterData)
+			.filter(k => k !== "heading")
+			.map(Number)
+			.sort((a, b) => a - b);
+
+		// --- 3. Compute the next position ---
+		let newBook = book;
+		let newChapter = chapterNum;
+		let newVerse = verseNum;
+
+		if (direction === 1) {
+			// Moving forward
+			const verseIdx = verses.indexOf(verseNum);
+			if (verseIdx < verses.length - 1) {
+				// Next verse in same chapter
+				newVerse = verses[verseIdx + 1];
+			} else {
+				// End of chapter — move to next chapter
+				const chapterIdx = chapters.indexOf(chapterNum);
+				if (chapterIdx < chapters.length - 1) {
+					// Next chapter in same book, verse 1
+					newChapter = chapters[chapterIdx + 1];
+					newVerse = await this.getFirstVerseOfChapter(book, String(newChapter));
+				} else {
+					// End of book — move to next book
+					const bookIdx = ALL_BOOKS.indexOf(book);
+					if (bookIdx >= ALL_BOOKS.length - 1) {
+						new Notice("You are at the last verse of the standard works");
+						return;
+					}
+					newBook = ALL_BOOKS[bookIdx + 1];
+					const result = await this.getFirstChapterAndVerse(newBook);
+					if (!result) return;
+					newChapter = result.chapter;
+					newVerse = result.verse;
+				}
+			}
+		} else {
+			// Moving backward
+			const verseIdx = verses.indexOf(verseNum);
+			if (verseIdx > 0) {
+				// Previous verse in same chapter
+				newVerse = verses[verseIdx - 1];
+			} else {
+				// Start of chapter — move to previous chapter
+				const chapterIdx = chapters.indexOf(chapterNum);
+				if (chapterIdx > 0) {
+					// Previous chapter in same book, last verse
+					newChapter = chapters[chapterIdx - 1];
+					newVerse = await this.getLastVerseOfChapter(book, String(newChapter));
+				} else {
+					// Start of book — move to previous book
+					const bookIdx = ALL_BOOKS.indexOf(book);
+					if (bookIdx <= 0) {
+						new Notice("You are at the first verse of the standard works");
+						return;
+					}
+					newBook = ALL_BOOKS[bookIdx - 1];
+					const result = await this.getLastChapterAndVerse(newBook);
+					if (!result) return;
+					newChapter = result.chapter;
+					newVerse = result.verse;
+				}
+			}
+		}
+
+		// --- 4. Open the target verse note ---
+		const filename = `${newBook} ${newChapter}.${newVerse}`;
+		const files = this.app.vault.getFiles();
+		const targetFile = files.find(f => f.basename === filename);
+
+		if (!targetFile) {
+			new Notice(`Verse not found in vault: ${filename}`);
+			return;
+		}
+
+		this.app.workspace.getLeaf(false).openFile(targetFile);
+	}
+
+	/** Return the numerically-first verse number in a given chapter (already loaded in cache or freshly loaded). */
+	private async getFirstVerseOfChapter(book: string, chapter: string): Promise<number> {
+		const dataFile = BOOK_TO_FILE[book];
+		if (!dataFile) return 1;
+		const data = await this.getScriptureData(dataFile);
+		const chData = data[book]?.[chapter] as { [key: string]: string } | undefined;
+		if (!chData) return 1;
+		const verses = Object.keys(chData).filter(k => k !== "heading").map(Number).sort((a, b) => a - b);
+		return verses[0] ?? 1;
+	}
+
+	/** Return the numerically-last verse number in a given chapter. */
+	private async getLastVerseOfChapter(book: string, chapter: string): Promise<number> {
+		const dataFile = BOOK_TO_FILE[book];
+		if (!dataFile) return 1;
+		const data = await this.getScriptureData(dataFile);
+		const chData = data[book]?.[chapter] as { [key: string]: string } | undefined;
+		if (!chData) return 1;
+		const verses = Object.keys(chData).filter(k => k !== "heading").map(Number).sort((a, b) => a - b);
+		return verses[verses.length - 1] ?? 1;
+	}
+
+	/** Return { chapter, verse } for the first chapter/verse of a book. */
+	private async getFirstChapterAndVerse(book: string): Promise<{ chapter: number; verse: number } | null> {
+		const dataFile = BOOK_TO_FILE[book];
+		if (!dataFile) {
+			new Notice(`Unknown book: ${book}`);
+			return null;
+		}
+		const data = await this.getScriptureData(dataFile);
+		const bookData = data[book];
+		if (!bookData) {
+			new Notice(`Book data not found: ${book}`);
+			return null;
+		}
+		const chapters = Object.keys(bookData).filter(k => k !== "heading").map(Number).sort((a, b) => a - b);
+		const chapter = chapters[0];
+		const verse = await this.getFirstVerseOfChapter(book, String(chapter));
+		return { chapter, verse };
+	}
+
+	/** Return { chapter, verse } for the last chapter/verse of a book. */
+	private async getLastChapterAndVerse(book: string): Promise<{ chapter: number; verse: number } | null> {
+		const dataFile = BOOK_TO_FILE[book];
+		if (!dataFile) {
+			new Notice(`Unknown book: ${book}`);
+			return null;
+		}
+		const data = await this.getScriptureData(dataFile);
+		const bookData = data[book];
+		if (!bookData) {
+			new Notice(`Book data not found: ${book}`);
+			return null;
+		}
+		const chapters = Object.keys(bookData).filter(k => k !== "heading").map(Number).sort((a, b) => a - b);
+		const chapter = chapters[chapters.length - 1];
+		const verse = await this.getLastVerseOfChapter(book, String(chapter));
+		return { chapter, verse };
+	}
+
 	async searchScriptures(searchTerm: string, dataFiles: string[], useRegex: boolean = false): Promise<SearchResult[]> {
 		const results: SearchResult[] = [];
 		
@@ -2425,10 +2648,36 @@ class ScriptureSearchModal extends Modal {
 			return;
 		}
 		
-		// Show result count
-		this.resultsContainer.createEl("div", { 
+		// Show result count + download button row
+		const resultsHeaderEl = this.resultsContainer.createEl("div", { cls: "search-results-header" });
+		resultsHeaderEl.createEl("div", {
 			text: `Found ${this.searchResults.length} result${this.searchResults.length === 1 ? '' : 's'}`,
 			cls: "search-result-count"
+		});
+		const downloadBtn = resultsHeaderEl.createEl("button", {
+			text: "Download JSON",
+			cls: "search-download-btn"
+		});
+		downloadBtn.addEventListener("click", () => {
+			const payload = this.searchResults.map(r => ({
+				reference: `${r.book} ${r.chapter}:${r.verse}`,
+				book: r.book,
+				chapter: r.chapter,
+				verse: r.verse,
+				text: r.text
+			}));
+			const json = JSON.stringify({ query: this.searchTerm, results: payload }, null, 2);
+			const blob = new Blob([json], { type: "application/json" });
+			const url = URL.createObjectURL(blob);
+			const a = document.createElement("a");
+			a.href = url;
+			const safeTerm = this.searchTerm.replace(/[^a-z0-9_\-]/gi, "_").slice(0, 40);
+			a.download = `scripture-search-${safeTerm}.json`;
+			document.body.appendChild(a);
+			a.click();
+			document.body.removeChild(a);
+			URL.revokeObjectURL(url);
+			new Notice(`Downloaded ${this.searchResults.length} result${this.searchResults.length === 1 ? '' : 's'} as JSON`);
 		});
 		
 		// Calculate pagination

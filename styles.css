@@ -324,10 +324,21 @@
 	color: var(--text-muted);
 }
 
-.search-result-count {
+.search-results-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
 	margin-bottom: 15px;
+}
+
+.search-result-count {
 	font-weight: bold;
 	color: var(--text-normal);
+}
+
+.search-download-btn {
+	padding: 4px 10px;
+	font-size: 0.85em;
 }
 
 .search-header-row {
